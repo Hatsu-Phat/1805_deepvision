@@ -1,0 +1,41 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.venv/
+venv/
+build/
+dist/
+
+# Editors / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Local notes and tooling (not part of the codebase)
+*.md
+!README.md
+/docs/
+/handoff/
+.claude/
+.gemini/
+.agents/
+
+# Data, artifacts, logs
+/data/
+/outputs/
+/runs/
+/logs/
+*.log
+*.csv
+*.parquet
+*.jsonl
+*.zip
+*.tar.gz
+*.mp4
+*.jpg
+*.pt
+*.pth
+*.ckpt

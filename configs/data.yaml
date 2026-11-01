@@ -1,0 +1,49 @@
+# Data pipeline configuration.
+# Paths are absolute on the local machine; override with --raw-root / --out-root on other hosts.
+
+raw_root: H:/lab/AIVDetection/data
+out_root: H:/lab/AIVDetection/data/deepvision_processed
+quarantine_root: H:/lab/AIVDetection/data/_quarantine_corrupt
+
+video_extensions: [.mp4, .avi, .mov, .mkv, .webm, .gif]
+ignore_patterns: ["__MACOSX", "/._"]
+
+workers: 6
+
+# Each source maps a directory under raw_root to (split, label, generator).
+# label: 0 = real, 1 = fake
+sources:
+  # ---- train ----
+  - {name: youku,      dir: Youku_1M_10s,     split: train, label: 0, generator: youku}
+  - {name: opensora,   dir: train_OpenSora,   split: train, label: 1, generator: OpenSora}
+  - {name: seine,      dir: train_SEINE,      split: train, label: 1, generator: SEINE}
+  - {name: svd,        dir: train_SVD,        split: train, label: 1, generator: SVD}
+  - {name: zeroscope,  dir: train_ZeroScope,  split: train, label: 1, generator: ZeroScope}
+  - {name: pika,       dir: train_pika,       split: train, label: 1, generator: Pika}
+  # ---- test (GenVideo-Val) ----
+  - {name: msrvtt,      dir: GenVideo-Val/GenVideo-Val/Real,             split: test, label: 0, generator: MSR-VTT}
+  - {name: crafter,     dir: GenVideo-Val/GenVideo-Val/Fake/Crafter,     split: test, label: 1, generator: Crafter}
+  - {name: gen2,        dir: GenVideo-Val/GenVideo-Val/Fake/Gen2,        split: test, label: 1, generator: Gen2}
+  - {name: hotshot,     dir: GenVideo-Val/GenVideo-Val/Fake/HotShot,     split: test, label: 1, generator: HotShot}
+  - {name: lavie,       dir: GenVideo-Val/GenVideo-Val/Fake/Lavie,       split: test, label: 1, generator: Lavie}
+  - {name: modelscope,  dir: GenVideo-Val/GenVideo-Val/Fake/ModelScope,  split: test, label: 1, generator: ModelScope}
+  - {name: moonvalley,  dir: GenVideo-Val/GenVideo-Val/Fake/MoonValley,  split: test, label: 1, generator: MoonValley}
+  - {name: morphstudio, dir: GenVideo-Val/GenVideo-Val/Fake/MorphStudio, split: test, label: 1, generator: MorphStudio}
+  - {name: show1,       dir: GenVideo-Val/GenVideo-Val/Fake/Show_1,      split: test, label: 1, generator: Show_1}
+  - {name: sora,        dir: GenVideo-Val/GenVideo-Val/Fake/Sora,        split: test, label: 1, generator: Sora}
+  - {name: wildscrape,  dir: GenVideo-Val/GenVideo-Val/Fake/WildScrape,  split: test, label: 1, generator: WildScrape}
+
+validation:
+  min_duration: 0.5        # seconds
+  min_side: 64             # pixels
+  probe_timeout: 60
+  decode_timeout: 120
+
+extraction:
+  num_frames: 16           # frames stored per video
+  base_fps: 2              # DeMamba: 2 fps for long videos
+  min_duration_for_base_fps: 8.0   # DeMamba uses 4 s for 8 frames; scaled to 16 frames
+  window: center           # center | first
+  jpeg_quality: 95
+  max_short_side: 0        # 0 keeps native resolution
+  decode_timeout: 300
