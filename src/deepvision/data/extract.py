@@ -215,27 +215,43 @@ def main(argv=None) -> None:
         jobs = build_jobs(cfg, manifest)
         log.info("extract %s: %d videos, %d workers", split, len(jobs), cfg.workers)
 
-        t0, done, errors, skipped = time.time(), [], [], 0
-        with ProcessPoolExecutor(cfg.workers) as pool:
+        tag = f"_{args.tag}" if args.tag else ""
+        cfg.logs_dir.mkdir(parents=True, exist_ok=True)
+
+        def save(done, errors):
+            pd.DataFrame(errors, columns=["video_id", "path", "split", "label", "generator", "error"]).to_csv(
+                cfg.logs_dir / f"extract_errors_{split}{tag}.csv", index=False)
+            pd.DataFrame([{k: v for k, v in d.items() if k != "skipped"} for d in done]).to_csv(
+                cfg.manifest_dir / f"{split}_frames{tag}.csv", index=False)
+
+        min_free = float(cfg.extraction.get("min_free_gb", 0)) * 2**30
+        t0, done, errors, skipped, stopped = time.time(), [], [], 0, False
+        pool = ProcessPoolExecutor(cfg.workers)
+        try:
             futures = [pool.submit(extract_one, j) for j in jobs]
-            for fut in tqdm(as_completed(futures), total=len(futures), desc=f"extract {split}", mininterval=10):
+            for i, fut in enumerate(tqdm(as_completed(futures), total=len(futures), desc=f"extract {split}",
+                                         mininterval=10)):
                 res = fut.result()
                 if "error" in res:
                     errors.append(res)
                 else:
                     skipped += bool(res.get("skipped"))
                     done.append(res)
+                if i % 2000 == 1999:
+                    save(done, errors)  # keep partial results if the run is killed
+                    if min_free and shutil.disk_usage(cfg.frames_dir).free < min_free:
+                        log.warning("free disk space below %.0f GB, stopping", min_free / 2**30)
+                        stopped = True
+                        break
+        finally:
+            pool.shutdown(wait=True, cancel_futures=True)
         elapsed = time.time() - t0
 
-        tag = f"_{args.tag}" if args.tag else ""
-        cfg.logs_dir.mkdir(parents=True, exist_ok=True)
-        pd.DataFrame(errors, columns=["video_id", "path", "split", "label", "generator", "error"]).to_csv(
-            cfg.logs_dir / f"extract_errors_{split}{tag}.csv", index=False)
-        pd.DataFrame([{k: v for k, v in d.items() if k != "skipped"} for d in done]).to_csv(
-            cfg.manifest_dir / f"{split}_frames{tag}.csv", index=False)
+        save(done, errors)
         new = len(done) - skipped
-        log.info("extract %s: ok %d (new %d, skipped %d), errors %d, %.1f min, %.2f new videos/s",
-                 split, len(done), new, skipped, len(errors), elapsed / 60, new / max(elapsed, 1e-9))
+        log.info("extract %s: ok %d (new %d, skipped %d), errors %d, %.1f min, %.2f new videos/s%s",
+                 split, len(done), new, skipped, len(errors), elapsed / 60, new / max(elapsed, 1e-9),
+                 " [stopped: low disk space]" if stopped else "")
 
 
 if __name__ == "__main__":
