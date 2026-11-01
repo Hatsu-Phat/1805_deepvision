@@ -1,0 +1,97 @@
+"""Loading and validating the data pipeline config (configs/data.yaml)."""
+from __future__ import annotations
+
+import argparse
+from dataclasses import dataclass, field
+from pathlib import Path
+
+import yaml
+
+LABEL_NAMES = {0: "real", 1: "fake"}
+
+
+@dataclass(frozen=True)
+class Source:
+    name: str
+    dir: str
+    split: str
+    label: int
+    generator: str
+
+    @property
+    def label_name(self) -> str:
+        return LABEL_NAMES[self.label]
+
+
+@dataclass
+class DataConfig:
+    raw_root: Path
+    out_root: Path
+    quarantine_root: Path
+    sources: list[Source]
+    video_extensions: tuple[str, ...] = (".mp4",)
+    ignore_patterns: tuple[str, ...] = ()
+    workers: int = 6
+    validation: dict = field(default_factory=dict)
+    extraction: dict = field(default_factory=dict)
+
+    @property
+    def inventory_dir(self) -> Path:
+        return self.out_root / "inventory"
+
+    @property
+    def manifest_dir(self) -> Path:
+        return self.out_root / "manifests"
+
+    @property
+    def frames_dir(self) -> Path:
+        return self.out_root / "frames"
+
+    @property
+    def logs_dir(self) -> Path:
+        return self.out_root / "logs"
+
+    def source(self, name: str) -> Source:
+        for s in self.sources:
+            if s.name == name:
+                return s
+        raise KeyError(name)
+
+
+def load_config(path: str | Path, raw_root: str | None = None, out_root: str | None = None) -> DataConfig:
+    with open(path, encoding="utf-8") as f:
+        cfg = yaml.safe_load(f)
+
+    sources = [Source(**s) for s in cfg["sources"]]
+    names = [s.name for s in sources]
+    if len(names) != len(set(names)):
+        raise ValueError("source names must be unique")
+    for s in sources:
+        if s.label not in LABEL_NAMES:
+            raise ValueError(f"{s.name}: label must be 0 or 1")
+
+    return DataConfig(
+        raw_root=Path(raw_root or cfg["raw_root"]),
+        out_root=Path(out_root or cfg["out_root"]),
+        quarantine_root=Path(cfg["quarantine_root"]),
+        sources=sources,
+        video_extensions=tuple(e.lower() for e in cfg.get("video_extensions", [".mp4"])),
+        ignore_patterns=tuple(cfg.get("ignore_patterns", [])),
+        workers=int(cfg.get("workers", 6)),
+        validation=cfg.get("validation", {}),
+        extraction=cfg.get("extraction", {}),
+    )
+
+
+def add_config_args(ap: argparse.ArgumentParser) -> None:
+    ap.add_argument("-c", "--config", default="configs/data.yaml")
+    ap.add_argument("--raw-root", default=None, help="override raw_root from the config")
+    ap.add_argument("--out-root", default=None, help="override out_root from the config")
+    ap.add_argument("--workers", type=int, default=None)
+
+
+def config_from_args(args: argparse.Namespace) -> DataConfig:
+    cfg = load_config(args.config, args.raw_root, args.out_root)
+    if args.workers:
+        cfg.workers = args.workers
+    return cfg
