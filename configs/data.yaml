@@ -47,3 +47,4 @@ extraction:
   jpeg_quality: 95
   max_short_side: 0        # 0 keeps native resolution
   decode_timeout: 300
+  min_free_gb: 150          # extraction stops when the disk has less free space than this
