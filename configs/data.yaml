@@ -56,3 +56,11 @@ clips:
   crop: demamba            # demamba: train youku 0.15, test 0.10, others 0 | or a fixed ratio
   jpeg_quality: 95
   keep_native: [test]      # splits whose native-resolution frames are kept next to the clips
+
+# Upload units: consecutive blocks of the priority-ordered manifest (~1 GB each at ~340 KB/video)
+shards:
+  videos_per_shard: 3000
+
+drive:
+  remote: gdrive:DeepVision/dataset_v1   # rclone remote:path
+  rclone: rclone
