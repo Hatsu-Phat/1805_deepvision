@@ -68,7 +68,7 @@ def push(cfg: DataConfig, log, transfers: int = 4) -> None:
     # small files: per-shard sidecars, split indices, manifests
     run_rclone(["copy", str(cfg.shards_dir), f"{remote}/shards", "--include", "*.csv", *common], cfg)
     run_rclone(["copy", str(cfg.manifest_dir), f"{remote}/manifests", "--include", "*_videos.csv",
-                "--include", "counts.json", *common], cfg)
+                "--include", "counts.json", "--include", "splits_*", *common], cfg)
 
 
 def main(argv=None) -> None:

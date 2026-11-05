@@ -6,3 +6,4 @@ PyYAML==6.0.3
 tqdm==4.70.1
 scikit-learn==1.9.1
 pytest==9.2.0
+# laptop tests of the training code (CPU build): pip install torch==2.15.0 --index-url https://download.pytorch.org/whl/cpu

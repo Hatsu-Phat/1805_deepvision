@@ -1,0 +1,29 @@
+# Server smoke tests (3) overfit and (4) kill/resume:
+#   python -m deepvision.train.smoke overfit -c configs/smoke.yaml
+#   python -m deepvision.train.smoke resume -c configs/smoke.yaml
+runs_root: ~/deepvision_runs
+cache_dir: ~/deepvision_cache
+gpu_memory_fraction: 0.8
+
+data:
+  root: gdrive:DeepVision/dataset_v1     # rclone remote:path or a local directory holding shards/
+  shard: shards/test/test-00000.tar
+  split: test
+  n_videos: 64                            # half real, half fake
+  num_frames: 8
+
+model:
+  width: 64
+
+train:
+  epochs: 200                             # 30 epochs reached only 83% train acc on the server (2026-11-05)
+  batch_size: 16
+  lr: 0.003
+  sampler: shuffle
+  seed: 0
+  ckpt_every: 10
+  log_every: 1
+  select: train_eval/acc
+
+resume:
+  kill_at_step: 45                        # not a multiple of ckpt_every, so steps 41-45 are replayed
