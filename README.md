@@ -65,6 +65,27 @@ for key, frames, meta in stream_shard("gdrive:DeepVision/dataset_v1", "shards/tr
 
 `shards/<split>_index.csv` lists which shard holds each video.
 
+`deepvision.data.stream.ShardStream` reads many shards in parallel for training and feature
+extraction (`workers x streams` shards open at once, retry on rclone errors, 8 of 16 frames kept):
+
+```bash
+python -m deepvision.data.stream --root gdrive:DeepVision/dataset_v1 --split test --shards 4 --workers 2 --streams 2
+```
+
+## Phase 2 framework
+
+Needs `pip install -e .[train]` (torch, torchvision).
+
+| What | Command / module |
+|------|------------------|
+| Server environment check | `python -m deepvision.envcheck --out ~/deepvision_runs/env_check.txt` |
+| Splits (train / val_id / val_ood holdout SEINE / test) | `python -m deepvision.data.splits -c configs/data.yaml` -> `manifests/splits_v1.csv` |
+| Metrics (AUROC, Protocol A, TNR-95 threshold, bootstrap CI, per generator) | `deepvision.eval.metrics` |
+| Training loop with exact resume, `ckpt/last.pt` + `ckpt/best.pt` | `deepvision.train.loop.Trainer` |
+| Smoke: overfit 64 videos, kill and resume | `python -m deepvision.train.smoke {overfit,resume} -c configs/smoke.yaml` |
+
+Runs live in `<runs_root>/<run_id>/` (`config.yaml`, `env.txt`, `train.log`, `metrics.jsonl`, `ckpt/`).
+
 ## Tests
 
 ```bash

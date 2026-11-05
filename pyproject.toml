@@ -19,6 +19,7 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["pytest"]
+train = ["torch", "torchvision"]  # not pinned: the server already has a CUDA build
 
 [tool.setuptools.packages.find]
 where = ["src"]
