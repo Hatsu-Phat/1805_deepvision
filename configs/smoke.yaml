@@ -13,10 +13,10 @@ data:
   num_frames: 8
 
 model:
-  width: 32
+  width: 64
 
 train:
-  epochs: 30
+  epochs: 200                             # 30 epochs reached only 83% train acc on the server (2026-11-05)
   batch_size: 16
   lr: 0.003
   sampler: shuffle
