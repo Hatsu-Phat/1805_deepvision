@@ -20,20 +20,28 @@ def indices():
     return train, test
 
 
-def test_splits_are_disjoint_and_stratified(indices):
+def test_default_splits_train_on_everything_else(indices):
     train, test = indices
-    s = build_splits(train, test, val_frac=0.02, seed=2024)
+    s = build_splits(train, test, ood_real_frac=0.02, seed=2024)
     assert len(s) == len(train) + len(test) and s["video_id"].is_unique
-    val = eval_set(s, "val_id")
-    assert val.groupby("generator").size().to_dict() == {"OpenSora": 20, "SVD": 4, "youku": 10}
-    assert not set(val["video_id"]) & set(eval_set(s, "train")["video_id"])
+    assert len(eval_set(s, "val_id")) == 0
+    tr = eval_set(s, "train")
+    assert tr.groupby("generator").size().to_dict() == {"OpenSora": 1000, "SVD": 200, "youku": 490}
     ood = eval_set(s, "val_ood")
     assert set(ood.query("label == 1")["generator"]) == {"SEINE"}
-    assert set(ood.query("label == 0")["video_id"]) == set(val.query("label == 0")["video_id"])
-    assert "SEINE" not in set(eval_set(s, "train")["generator"])
+    assert len(ood.query("label == 0")) == 10 and not set(ood["video_id"]) & set(tr["video_id"])
     assert set(eval_set(s, "test")["video_id"]) == set(test["video_id"])
     counts = split_counts(s)
     assert counts["val_ood"] == {"videos": 310, "real": 10, "fake": 300, "by_generator": {"SEINE": 300, "youku": 10}}
+
+
+def test_optional_val_id_is_stratified(indices):
+    train, test = indices
+    s = build_splits(train, test, val_frac=0.02)
+    val = eval_set(s, "val_id")
+    assert val.groupby("generator").size().to_dict() == {"OpenSora": 20, "SVD": 4, "youku": 10}  # 2% of 490 youku
+    assert not set(val["video_id"]) & set(eval_set(s, "train")["video_id"])
+    assert not set(val["video_id"]) & set(eval_set(s, "val_ood")["video_id"])
 
 
 def test_splits_are_reproducible(indices):

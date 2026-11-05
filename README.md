@@ -79,7 +79,7 @@ Needs `pip install -e .[train]` (torch, torchvision).
 | What | Command / module |
 |------|------------------|
 | Server environment check | `python -m deepvision.envcheck --out ~/deepvision_runs/env_check.txt` |
-| Splits (train / val_id / val_ood holdout SEINE / test) | `python -m deepvision.data.splits -c configs/data.yaml` -> `manifests/splits_v1.csv` |
+| Splits (train / val_ood = SEINE + 2% held-out reals / test, optional val_id) | `python -m deepvision.data.splits -c configs/data.yaml` -> `manifests/splits_v1.csv` |
 | Metrics (AUROC, Protocol A, TNR-95 threshold, bootstrap CI, per generator) | `deepvision.eval.metrics` |
 | Training loop with exact resume, `ckpt/last.pt` + `ckpt/best.pt` | `deepvision.train.loop.Trainer` |
 | Smoke: overfit 64 videos, kill and resume | `python -m deepvision.train.smoke {overfit,resume} -c configs/smoke.yaml` |

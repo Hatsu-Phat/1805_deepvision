@@ -41,7 +41,7 @@ class TrainConfig:
     num_workers: int = 0
     ckpt_every: int = 0             # steps between mid-epoch checkpoints; 0 = end of epoch only
     log_every: int = 50
-    select: str = "val_id/auroc"    # metric (higher is better) that picks ckpt/best.pt
+    select: str = "test/auroc"      # metric (higher is better) that picks ckpt/best.pt (user decision 2026-11-05)
 
     @classmethod
     def from_dict(cls, d: dict) -> "TrainConfig":

@@ -68,7 +68,7 @@ def test_checkpoint_atomic(tmp_path):
 
 def test_trainer_learns_and_keeps_best(tmp_path):
     data, labels = toy_data()
-    cfg = TrainConfig(epochs=8, batch_size=16, lr=0.02, log_every=2)
+    cfg = TrainConfig(epochs=8, batch_size=16, lr=0.02, log_every=2, select="val_id/auroc")
     progress = Trainer(make_model(), cfg, tmp_path, evaluate_fn=eval_fn(data, labels)).fit(data, labels)
     evals = [r for r in records(tmp_path) if r["set"] == "val_id"]
     assert len(evals) == 8 and evals[-1]["auroc"] > 0.9
@@ -80,7 +80,8 @@ def test_trainer_learns_and_keeps_best(tmp_path):
 @pytest.mark.parametrize("kill_at", [7, 13, 30])  # mid-epoch, right after a checkpoint, an epoch end
 def test_resume_matches_uninterrupted(tmp_path, kill_at):
     data, labels = toy_data()
-    cfg = TrainConfig(epochs=5, batch_size=16, lr=0.01, ckpt_every=4, log_every=1, sampler="balanced")
+    cfg = TrainConfig(epochs=5, batch_size=16, lr=0.01, ckpt_every=4, log_every=1, sampler="balanced",
+                      select="val_id/auroc")
     full = Trainer(make_model(), cfg, tmp_path / "a", evaluate_fn=eval_fn(data, labels)).fit(data, labels)
 
     Trainer(make_model(), cfg, tmp_path / "b", evaluate_fn=eval_fn(data, labels)).fit(data, labels, stop_after=kill_at)
