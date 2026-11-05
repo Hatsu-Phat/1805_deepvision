@@ -8,6 +8,8 @@ For every video in manifests/<split>_videos.csv:
 
 A video whose meta.json exists is skipped, so the step can be interrupted and resumed.
 Videos that cannot be decoded are listed in logs/extract_errors_<split>.csv.
+With `extraction.output: clips` the frames are not kept at native resolution: each video is
+written as one resized tar under clips/ (see clips.py) and a clip that exists is skipped.
 """
 from __future__ import annotations
 
@@ -28,6 +30,7 @@ import pandas as pd
 from tqdm import tqdm
 
 from . import ffmpeg
+from .clips import build_clip, clip_options, clip_path_for, convert_one, load_clip_meta
 from .config import LABEL_NAMES, DataConfig, add_config_args, config_from_args
 from .io import setup_logging
 from .sampling import sampling_rate, window_start
@@ -105,7 +108,15 @@ def frames_dir_for(cfg_frames_dir: Path, row: dict) -> Path:
 def extract_one(job: dict) -> dict:
     src, dst, opts = Path(job["src"]), Path(job["dst"]), job["opts"]
     meta_path = dst / "meta.json"
-    if meta_path.exists():
+    clip = job.get("clip")
+    if clip:
+        clip_dst = Path(clip["dst"])
+        if clip_dst.exists():
+            return load_clip_meta(clip_dst) | {"skipped": True}
+        if meta_path.exists():  # extracted earlier at native resolution
+            return convert_one(job | {"src": str(dst), "dst": str(clip_dst), "clips_root": clip["root"],
+                                      "opts": clip["opts"], "delete_native": clip["delete_native"]})
+    elif meta_path.exists():
         return json.loads(meta_path.read_text(encoding="utf-8")) | {"skipped": True}
 
     base = {"video_id": job["video_id"], "path": job["path"], "split": job["split"],
@@ -129,11 +140,7 @@ def extract_one(job: dict) -> dict:
             if any(i not in frames for i in idx):
                 raise RuntimeError("could not re-read the selected window")
 
-        tmp = dst.with_name(dst.name + ".tmp")
-        if tmp.exists():
-            shutil.rmtree(tmp)
-        tmp.mkdir(parents=True)
-        hashes, nbytes, shape = [], 0, None
+        hashes, nbytes, shape, encoded = [], 0, None, []
         for j, i in enumerate(idx):
             img = cv2.imdecode(np.frombuffer(frames[i], np.uint8), cv2.IMREAD_COLOR)
             if img is None:
@@ -144,7 +151,7 @@ def extract_one(job: dict) -> dict:
             ok, buf = cv2.imencode(".jpg", img, [cv2.IMWRITE_JPEG_QUALITY, int(opts["jpeg_quality"])])
             if not ok:
                 raise RuntimeError("jpeg encode failed")
-            (tmp / f"{j:03d}.jpg").write_bytes(buf.tobytes())
+            encoded.append(buf.tobytes())
             nbytes += len(buf)
 
         meta = base | {
@@ -154,6 +161,14 @@ def extract_one(job: dict) -> dict:
             "height": int(shape[0]), "width": int(shape[1]), "bytes": nbytes,
             "decode_warning": (stderr.splitlines()[0][:200] if stderr else ""),
         }
+        if clip:
+            return build_clip(encoded, meta, clip["opts"], Path(clip["dst"]), Path(clip["root"]))
+        tmp = dst.with_name(dst.name + ".tmp")
+        if tmp.exists():
+            shutil.rmtree(tmp)
+        tmp.mkdir(parents=True)
+        for j, data in enumerate(encoded):
+            (tmp / f"{j:03d}.jpg").write_bytes(data)
         (tmp / "meta.json").write_text(json.dumps(meta), encoding="utf-8")
         if dst.exists():
             shutil.rmtree(dst)
@@ -168,21 +183,31 @@ def build_jobs(cfg: DataConfig, manifest: pd.DataFrame) -> list[dict]:
         "num_frames": 16, "base_fps": 2, "min_duration_for_base_fps": None, "window": "center",
         "jpeg_quality": 95, "max_short_side": 0, "decode_timeout": 300,
     } | cfg.extraction
+    copts = clip_options(cfg)
     jobs = []
     for row in manifest.to_dict("records"):
-        jobs.append(row | {
+        job = row | {
             "src": str(cfg.raw_root / row["path"]),
             "dst": str(frames_dir_for(cfg.frames_dir, row)),
             "frames_root": str(cfg.frames_dir),
             "opts": opts,
-        })
+        }
+        if opts.get("output", "frames") == "clips":
+            job["clip"] = {"dst": str(clip_path_for(cfg.clips_dir, row)), "root": str(cfg.clips_dir),
+                           "opts": copts, "delete_native": row["split"] not in copts["keep_native"]}
+        jobs.append(job)
     return jobs
 
 
-def collect_index(cfg: DataConfig, manifest: pd.DataFrame) -> pd.DataFrame:
-    """Read meta.json of every extracted video in the manifest."""
+def collect_index(cfg: DataConfig, manifest: pd.DataFrame, clips: bool = False) -> pd.DataFrame:
+    """Read the meta of every extracted video (or clip) in the manifest."""
     rows = []
     for row in manifest.to_dict("records"):
+        if clips:
+            path = clip_path_for(cfg.clips_dir, row)
+            if path.exists():
+                rows.append(load_clip_meta(path))
+            continue
         meta = frames_dir_for(cfg.frames_dir, row) / "meta.json"
         if meta.exists():
             rows.append(json.loads(meta.read_text(encoding="utf-8")))
@@ -196,10 +221,12 @@ def main(argv=None) -> None:
     ap.add_argument("--limit-per-generator", type=int, default=0, help="pilot mode: first N videos per generator")
     ap.add_argument("--generators", nargs="*", help="restrict to these generators")
     ap.add_argument("--tag", default="", help="suffix for the error/summary files")
-    ap.add_argument("--index-only", action="store_true", help="only rebuild <split>_frames.csv from meta.json files")
+    ap.add_argument("--index-only", action="store_true", help="only rebuild the <split> index from the stored meta")
     args = ap.parse_args(argv)
     cfg = config_from_args(args)
     log = setup_logging(cfg.logs_dir / "extract.log")
+    clips = cfg.extraction.get("output", "frames") == "clips"
+    kind = "clips" if clips else "frames"
 
     for split in args.split:
         manifest = pd.read_csv(cfg.manifest_dir / f"{split}_videos.csv")
@@ -208,8 +235,8 @@ def main(argv=None) -> None:
         if args.limit_per_generator:
             manifest = manifest.groupby("generator", group_keys=False).head(args.limit_per_generator)
         if args.index_only:
-            index = collect_index(cfg, manifest)
-            index.to_csv(cfg.manifest_dir / f"{split}_frames.csv", index=False)
+            index = collect_index(cfg, manifest, clips)
+            index.to_csv(cfg.manifest_dir / f"{split}_{kind}.csv", index=False)
             log.info("index %s: %d of %d videos extracted", split, len(index), len(manifest))
             continue
         jobs = build_jobs(cfg, manifest)
@@ -222,7 +249,7 @@ def main(argv=None) -> None:
             pd.DataFrame(errors, columns=["video_id", "path", "split", "label", "generator", "error"]).to_csv(
                 cfg.logs_dir / f"extract_errors_{split}{tag}.csv", index=False)
             pd.DataFrame([{k: v for k, v in d.items() if k != "skipped"} for d in done]).to_csv(
-                cfg.manifest_dir / f"{split}_frames{tag}.csv", index=False)
+                cfg.manifest_dir / f"{split}_{kind}{tag}.csv", index=False)
 
         min_free = float(cfg.extraction.get("min_free_gb", 0)) * 2**30
         t0, done, errors, skipped, stopped = time.time(), [], [], 0, False

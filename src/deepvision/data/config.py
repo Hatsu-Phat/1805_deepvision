@@ -34,6 +34,9 @@ class DataConfig:
     workers: int = 6
     validation: dict = field(default_factory=dict)
     extraction: dict = field(default_factory=dict)
+    clips: dict = field(default_factory=dict)
+    shards: dict = field(default_factory=dict)
+    drive: dict = field(default_factory=dict)
 
     @property
     def inventory_dir(self) -> Path:
@@ -46,6 +49,14 @@ class DataConfig:
     @property
     def frames_dir(self) -> Path:
         return self.out_root / "frames"
+
+    @property
+    def clips_dir(self) -> Path:
+        return self.out_root / "clips"
+
+    @property
+    def shards_dir(self) -> Path:
+        return self.out_root / "shards"
 
     @property
     def logs_dir(self) -> Path:
@@ -80,6 +91,9 @@ def load_config(path: str | Path, raw_root: str | None = None, out_root: str | N
         workers=int(cfg.get("workers", 6)),
         validation=cfg.get("validation", {}),
         extraction=cfg.get("extraction", {}),
+        clips=cfg.get("clips", {}),
+        shards=cfg.get("shards", {}),
+        drive=cfg.get("drive", {}),
     )
 
 
