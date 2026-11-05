@@ -89,3 +89,20 @@ def test_run_one_trains_evaluates_and_resumes(store, tmp_path, feature):
     assert run_one(cfg, feature, "mlp", 0, sets, "cpu") == json.loads((run_dir / "final.json").read_text())
     row = summary(tmp_path / "runs").iloc[0]
     assert row["test_auroc"] == final["test"]["auroc"] and row["val_ood_tnr95_tnr"] >= 0.95
+
+
+def test_run_one_without_val_ood_uses_test_reals_for_the_threshold(store, tmp_path):
+    out, splits = store
+    splits = splits.assign(split=splits["split"].replace({"holdout": "train", "ood_real": "train"}))
+    sets = load_sets(out, "enc", splits, "cpu")
+    assert set(sets) == {"train", "test"} and len(sets["train"][1]) == 600
+    cfg = {"prefix": "p2f", "runs_root": str(tmp_path / "runs"), "n_boot": 20, "head": {"hidden": 16, "dropout": 0.1},
+           "train": {"epochs": 2, "batch_size": 64, "lr": 0.01, "sampler": "balanced", "log_every": 5,
+                     "select": "test/auroc", "amp": "off"}}
+    final = run_one(cfg, "enc", "linear", 1, sets, "cpu")
+    assert "val_ood" not in final and final["tnr95_from"] == "test" and final["test"]["at_tnr"]["tnr"] >= 0.95
+    assert (tmp_path / "runs" / "p2f_enc_linear_s1" / "predictions_test.csv").exists()
+    assert not (tmp_path / "runs" / "p2f_enc_linear_s1" / "predictions_val_ood.csv").exists()
+    row = summary(tmp_path / "runs", "p2f").iloc[0]
+    assert row["test_auroc"] == final["test"]["auroc"] and "val_ood_auroc" not in row
+    assert summary(tmp_path / "runs", "p2").empty

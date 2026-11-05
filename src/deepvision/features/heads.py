@@ -3,18 +3,21 @@
 Heads (on the mean of the 8 frame features, standardized with train statistics):
     linear  logistic regression
     mlp     Linear(D, hidden) - GELU - Dropout - Linear(hidden, 1)
-Splits come from manifests/splits_v1.csv: train on `train`; checkpoints are selected on test AUROC
-(user decision 2026-11-05); val_ood (held-out SEINE fakes + held-out reals) is never used to train or select.
+Splits come from manifests/splits_<version>.csv: train on `train`; checkpoints are selected on test AUROC
+(user decision 2026-11-05). splits_v1 holds out val_ood (SEINE fakes + 2% of the reals), never used to train
+or select; splits_v2 trains on every train video and evaluates on test only (user decision 2026-11-06).
 
-Each run <runs_root>/p2_<feature>_<head>_s<seed>/ gets config.yaml, env.txt, train.log, metrics.jsonl,
-ckpt/{last,best}.pt, predictions_{test,val_ood}.csv and final.json with
+Each run <runs_root>/<prefix>_<feature>_<head>_s<seed>/ gets config.yaml, env.txt, train.log, metrics.jsonl,
+ckpt/{last,best}.pt, predictions_<set>.csv and final.json with
     protocol A (threshold 0.5): AUROC, AP, acc, bAcc, F1, recall, TNR, precision
-    TNR-95: same metrics at the threshold that keeps 95% of the val_ood reals below it
+    TNR-95: same metrics at the threshold that keeps 95% of the reals below it, the val_ood reals when the
+            splits have a val_ood, otherwise the test reals (then it is TPR at 5% FPR on test)
     bootstrap 95% CI of AUROC, per-generator AUROC / AP / recall
 Finished runs are skipped, so the command can be rerun after an interruption.
 
     python -m deepvision.features.heads --features resnet50 xclip_b32 xclip_b32:video --heads linear mlp --seeds 0 1 2
-    python -m deepvision.features.heads --summary      # one row per run -> <runs_root>/p2_summary.csv
+    python -m deepvision.features.heads --summary      # one row per run -> <runs_root>/<prefix>_summary.csv
+    python -m deepvision.features.heads --splits gdrive:DeepVision/dataset_v1/manifests/splits_v2.csv --prefix p2f
 """
 from __future__ import annotations
 
@@ -86,10 +89,13 @@ def read_splits(path: str, rclone: str = "rclone") -> pd.DataFrame:
 
 
 def load_sets(out: Path, feature: str, splits: pd.DataFrame, device) -> dict:
-    """train / test / val_ood tensors and their rows (labels and generators from the feature index)."""
+    """train / test / val_ood (when the splits hold one out) tensors and their rows (labels and generators
+    from the feature index)."""
     sets = {}
     for name, split in (("train", "train"), ("val_ood", "train"), ("test", "test")):
         ids = set(eval_set(splits, name)["video_id"])
+        if not ids and name == "val_ood":
+            continue
         X, rows = load_features(out, feature, split, "mean", device, keep=ids)
         missing = len(ids) - len(rows)
         if missing:
@@ -99,7 +105,7 @@ def load_sets(out: Path, feature: str, splits: pd.DataFrame, device) -> dict:
 
 
 def run_one(cfg: dict, feature: str, head: str, seed: int, sets: dict, device) -> dict:
-    run_id = f"p2_{feature.replace(':', '-')}_{head}_s{seed}"
+    run_id = f"{cfg.get('prefix', 'p2')}_{feature.replace(':', '-')}_{head}_s{seed}"
     run_cfg = cfg | {"feature": feature, "head": head, "train": cfg["train"] | {"seed": seed}}
     run_dir = expand(cfg["runs_root"]) / run_id
     if (run_dir / "final.json").exists():
@@ -112,7 +118,7 @@ def run_one(cfg: dict, feature: str, head: str, seed: int, sets: dict, device) -
     set_seed(seed)
     model = build_head(head, Xtr.shape[1], mean, std, **cfg.get("head", {})).to(device)
     evalsets = {k: (TensorDataset(sets[k][0], torch.zeros(len(sets[k][0]), device=device)), sets[k][1])
-                for k in ("test", "val_ood")}
+                for k in ("test", "val_ood") if k in sets}
 
     def evaluate_fn(m):
         return {k: binary_metrics(r["label"], predict(m, ds, 8192, device, tcfg.amp)) for k, (ds, r) in evalsets.items()}
@@ -122,10 +128,11 @@ def run_one(cfg: dict, feature: str, head: str, seed: int, sets: dict, device) -
     best = torch.load(run_dir / "ckpt" / "best.pt", map_location=device, weights_only=False)
     model.load_state_dict(best["model"])
     scores = {k: predict(model, ds, 8192, device, tcfg.amp) for k, (ds, _) in evalsets.items()}
-    ood_rows = evalsets["val_ood"][1]
-    t95 = threshold_at_tnr(scores["val_ood"][ood_rows["label"].to_numpy() == 0], 0.95)
+    ref = "val_ood" if "val_ood" in evalsets else "test"
+    t95 = threshold_at_tnr(scores[ref][evalsets[ref][1]["label"].to_numpy() == 0], 0.95)
     final = {"run_id": run_id, "feature": feature, "head": head, "seed": seed, "best_epoch_step": best["progress"]["best_step"],
              "train_videos": len(rtr), "train_seconds": round(time.time() - t0, 1), "tnr95_threshold": t95,
+             "tnr95_from": ref,
              "params": sum(p.numel() for p in model.parameters())}
     for k, (_, rows) in evalsets.items():
         df = rows[["video_id", "generator", "label"]].assign(score=scores[k])
@@ -133,19 +140,19 @@ def run_one(cfg: dict, feature: str, head: str, seed: int, sets: dict, device) -
         final[k] = evaluate(df, 0.5, t95, n_boot=cfg.get("n_boot", 1000), seed=seed)
     (run_dir / "final.json").write_text(json.dumps(final, indent=2, default=float))
     log.info("%s: test AUROC %.4f AP %.4f F1 %.4f | val_ood AUROC %.4f", run_id, final["test"]["auroc"],
-             final["test"]["ap"], final["test"]["f1"], final["val_ood"]["auroc"])
+             final["test"]["ap"], final["test"]["f1"], final.get("val_ood", {}).get("auroc", float("nan")))
     return final
 
 
 SUMMARY_KEYS = ("auroc", "ap", "acc", "bacc", "f1", "recall", "tnr", "precision")
 
 
-def summary(runs_root: Path) -> pd.DataFrame:
+def summary(runs_root: Path, prefix: str = "p2") -> pd.DataFrame:
     rows = []
-    for path in sorted(runs_root.glob("p2_*/final.json")):
+    for path in sorted(runs_root.glob(f"{prefix}_*/final.json")):
         f = json.loads(path.read_text())
         row = {k: f[k] for k in ("run_id", "feature", "head", "seed", "train_videos")}
-        for s in ("test", "val_ood"):
+        for s in ("test", "val_ood") if "val_ood" in f else ("test",):
             row |= {f"{s}_{k}": f[s][k] for k in SUMMARY_KEYS}
             row |= {f"{s}_auroc_ci_low": f[s]["auroc_ci"][0], f"{s}_auroc_ci_high": f[s]["auroc_ci"][1]}
             row |= {f"{s}_tnr95_{k}": f[s]["at_tnr"][k] for k in ("acc", "bacc", "f1", "recall", "tnr")}
@@ -164,18 +171,20 @@ def main(argv=None) -> None:
     ap.add_argument("--set", action="append", default=[], help="train option override, e.g. epochs=30")
     ap.add_argument("--n-boot", type=int, default=1000)
     ap.add_argument("--summary", action="store_true")
+    ap.add_argument("--prefix", default="p2", help="run id prefix; p2 = splits_v1 runs, p2f = splits_v2 runs")
     args = ap.parse_args(argv)
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     runs_root = expand(args.runs_root)
     if args.summary:
-        df = summary(runs_root)
-        df.to_csv(runs_root / "p2_summary.csv", index=False)
-        print(df.groupby(["feature", "head"])[["test_auroc", "test_ap", "test_f1", "val_ood_auroc"]].agg(["mean", "std"]))
+        df = summary(runs_root, args.prefix)
+        df.to_csv(runs_root / f"{args.prefix}_summary.csv", index=False)
+        cols = [c for c in ("test_auroc", "test_ap", "test_f1", "val_ood_auroc") if c in df]
+        print(df.groupby(["feature", "head"])[cols].agg(["mean", "std"]))
         return
     import yaml
 
     train = DEFAULT_TRAIN | {k: yaml.safe_load(v) for k, v in (s.split("=", 1) for s in args.set)}
-    cfg = {"runs_root": str(runs_root), "features_dir": args.out, "splits": args.splits, "n_boot": args.n_boot,
+    cfg = {"prefix": args.prefix, "runs_root": str(runs_root), "features_dir": args.out, "splits": args.splits, "n_boot": args.n_boot,
            "gpu_memory_fraction": 0.8, "train": train, "head": {"hidden": 512, "dropout": 0.5}}
     device = setup_device(cfg["gpu_memory_fraction"])
     splits = read_splits(args.splits)

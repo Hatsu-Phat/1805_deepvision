@@ -1,4 +1,4 @@
-"""Phase 2 splits built from the shard indices -> manifests/splits_v1.csv (+ splits_v1_counts.json).
+"""Phase 2 splits built from the shard indices -> manifests/splits_<version>.csv (+ splits_<version>_counts.json).
 
 Every indexed video gets one `split`:
     train     train videos used for fitting (everything not held out below)
@@ -8,7 +8,9 @@ Every indexed video gets one `split`:
     test      the test split (GenVideo-Val); also used to pick checkpoints (user decision 2026-11-05)
 Evaluation sets (see eval_set): val_ood = holdout + ood_real; val_id; test.
 
-    python -m deepvision.data.splits -c configs/data.yaml
+    python -m deepvision.data.splits -c configs/data.yaml                      # v1: SEINE + 2% reals held out
+    python -m deepvision.data.splits -c configs/data.yaml --version v2 --ood-real-frac 0 --holdout
+                                       # v2: train on every train video, test only (user decision 2026-11-06)
 """
 from __future__ import annotations
 
@@ -20,7 +22,6 @@ import pandas as pd
 
 from .config import add_config_args, config_from_args
 
-VERSION = "v1"
 COLUMNS = ["video_id", "key", "shard", "label", "generator", "split"]
 EVAL_SETS = ("val_id", "val_ood", "test")
 
@@ -84,18 +85,19 @@ def main(argv=None) -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     add_config_args(ap)
     ap.add_argument("--ood-real-frac", type=float, default=0.02)
-    ap.add_argument("--holdout", nargs="+", default=["SEINE"])
+    ap.add_argument("--holdout", nargs="*", default=["SEINE"], help="no value: hold out no generator")
     ap.add_argument("--val-frac", type=float, default=0.0)
     ap.add_argument("--seed", type=int, default=2024)
+    ap.add_argument("--version", default="v1")
     args = ap.parse_args(argv)
     cfg = config_from_args(args)
     splits = build_splits(pd.read_csv(cfg.shards_dir / "train_index.csv"), pd.read_csv(cfg.shards_dir / "test_index.csv"),
                           args.ood_real_frac, tuple(args.holdout), args.val_frac, args.seed)
-    out = cfg.manifest_dir / f"splits_{VERSION}.csv"
+    out = cfg.manifest_dir / f"splits_{args.version}.csv"
     splits.to_csv(out, index=False)
-    counts = {"version": VERSION, "ood_real_frac": args.ood_real_frac, "holdout": args.holdout,
+    counts = {"version": args.version, "ood_real_frac": args.ood_real_frac, "holdout": args.holdout,
               "val_frac": args.val_frac, "seed": args.seed} | split_counts(splits)
-    (cfg.manifest_dir / f"splits_{VERSION}_counts.json").write_text(json.dumps(counts, indent=2))
+    (cfg.manifest_dir / f"splits_{args.version}_counts.json").write_text(json.dumps(counts, indent=2))
     print(out)
     print(json.dumps({k: {kk: v[kk] for kk in ("videos", "real", "fake")} for k, v in counts.items()
                       if isinstance(v, dict)}, indent=2))
