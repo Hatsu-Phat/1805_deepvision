@@ -1,6 +1,7 @@
 """Binary detection metrics (label 1 = fake, score = probability of fake).
 
     auroc                 main metric (rank based, equal to sklearn.metrics.roc_auc_score)
+    average_precision     AP of the fake class (sklearn.metrics.average_precision_score)
     binary_metrics        acc / bAcc / F1 / TNR / recall / precision at a threshold (Protocol A: 0.5)
     threshold_at_tnr      threshold that keeps `tnr` of the reals below it (fit on val reals)
     bootstrap_auroc_ci    stratified bootstrap CI
@@ -14,6 +15,7 @@ import math
 import numpy as np
 import pandas as pd
 from scipy.stats import rankdata
+from sklearn.metrics import average_precision_score
 
 
 def _arrays(y, s) -> tuple[np.ndarray, np.ndarray]:
@@ -35,6 +37,13 @@ def auroc(y, s) -> float:
     return float((ranks[y == 1].sum() - n_pos * (n_pos + 1) / 2) / (n_pos * n_neg))
 
 
+def average_precision(y, s) -> float:
+    y, s = _arrays(y, s)
+    if y.sum() == 0 or y.sum() == len(y):
+        return float("nan")
+    return float(average_precision_score(y, s))
+
+
 def binary_metrics(y, s, threshold: float = 0.5) -> dict:
     y, s = _arrays(y, s)
     pred = s >= threshold
@@ -46,7 +55,7 @@ def binary_metrics(y, s, threshold: float = 0.5) -> dict:
     precision = tp / (tp + fp) if tp + fp else float("nan")
     f1 = 2 * tp / (2 * tp + fp + fn) if tp + fp + fn else float("nan")
     return {"n": len(y), "n_fake": int(pos.sum()), "n_real": int(neg.sum()), "threshold": float(threshold),
-            "auroc": auroc(y, s), "acc": (tp + tn) / len(y) if len(y) else float("nan"),
+            "auroc": auroc(y, s), "ap": average_precision(y, s), "acc": (tp + tn) / len(y) if len(y) else float("nan"),
             "bacc": (recall + tnr) / 2,
             "f1": f1, "tnr": tnr, "recall": recall, "precision": precision}
 
@@ -83,7 +92,7 @@ def per_generator(df: pd.DataFrame, threshold: float = 0.5, n_boot: int = 1000, 
     rows = []
     for gen, part in df.groupby("generator", sort=True):
         if (part["label"] == 0).all():
-            rows.append({"generator": gen, "label": 0, "n": len(part), "auroc": float("nan"),
+            rows.append({"generator": gen, "label": 0, "n": len(part), "auroc": float("nan"), "ap": float("nan"),
                          "ci_low": float("nan"), "ci_high": float("nan"), "recall": float("nan"),
                          "tnr": float((part["score"] < threshold).mean())})
             continue
@@ -91,7 +100,8 @@ def per_generator(df: pd.DataFrame, threshold: float = 0.5, n_boot: int = 1000, 
         y = np.r_[np.ones(len(fakes)), np.zeros(len(reals))]
         s = np.r_[fakes["score"].to_numpy(), reals["score"].to_numpy()]
         lo, hi = bootstrap_auroc_ci(y, s, n_boot, seed=seed)
-        rows.append({"generator": gen, "label": 1, "n": len(fakes), "auroc": auroc(y, s), "ci_low": lo,
+        rows.append({"generator": gen, "label": 1, "n": len(fakes), "auroc": auroc(y, s),
+                     "ap": average_precision(y, s), "ci_low": lo,
                      "ci_high": hi, "recall": float((fakes["score"] >= threshold).mean()), "tnr": float("nan")})
     return pd.DataFrame(rows)
 
