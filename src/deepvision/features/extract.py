@@ -28,6 +28,8 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
+from ..data.config import SPLITS
+
 LOG = logging.getLogger("deepvision")
 FRAME_INDICES = [0, 2, 4, 6, 9, 11, 13, 15]
 INDEX_COLUMNS = ["video_id", "label", "generator", "key"]
@@ -273,7 +275,7 @@ def main(argv=None) -> None:
     ap.add_argument("command", choices=["extract", "upload", "cost"])
     ap.add_argument("--root", default="gdrive:DeepVision/dataset_v1")
     ap.add_argument("--remote", default="gdrive:DeepVision/features_v1")
-    ap.add_argument("--split", choices=["train", "test"], default="test")
+    ap.add_argument("--split", choices=SPLITS, default="test")
     ap.add_argument("--encoders", nargs="+", choices=ENCODERS, default=list(ENCODERS))
     ap.add_argument("--out", default="~/deepvision_features")
     ap.add_argument("--shards", type=int, default=None, help="only the first N shards (smoke test)")

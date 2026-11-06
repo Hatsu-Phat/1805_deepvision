@@ -62,6 +62,7 @@ def test_val_transform_matches_reference(images):
 def test_crop_policy():
     assert demamba_crop_percentage("train", "youku", 0) == 0.15
     assert demamba_crop_percentage("train", "Pika", 1) == 0.0
+    assert demamba_crop_percentage("train2", "youku", 0) == 0.15  # extra Youku reals are cropped like train
     assert demamba_crop_percentage("test", "MSR-VTT", 0) == 0.10
     assert demamba_crop_percentage("test", "Sora", 1) == 0.10
 

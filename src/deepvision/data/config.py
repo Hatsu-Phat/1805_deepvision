@@ -8,6 +8,11 @@ from pathlib import Path
 import yaml
 
 LABEL_NAMES = {0: "real", 1: "fake"}
+# train2 holds the extra Youku reals added on 2026-11-06 (Youku_1M_10s.split.ab-ae). It is a split of its
+# own so that the manifest, shards and features of train (already on Drive) never change; the splits
+# manifest and the heads treat train + train2 as one training set.
+TRAIN_SPLITS = ("train", "train2")
+SPLITS = ("train", "test", "train2")
 
 
 @dataclass(frozen=True)

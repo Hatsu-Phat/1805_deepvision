@@ -20,6 +20,8 @@ sources:
   - {name: svd,        dir: train_SVD,        split: train, label: 1, generator: SVD}
   - {name: zeroscope,  dir: train_ZeroScope,  split: train, label: 1, generator: ZeroScope}
   - {name: pika,       dir: train_pika,       split: train, label: 1, generator: Pika}
+  # ---- train2: extra Youku reals from Youku_1M_10s.split.ab-ae (2026-11-06), cropped like train ----
+  - {name: youku_more, dir: Youku_1M_10s_more, split: train2, label: 0, generator: youku}
   # ---- test (GenVideo-Val) ----
   - {name: msrvtt,      dir: GenVideo-Val/GenVideo-Val/Real,             split: test, label: 0, generator: MSR-VTT}
   - {name: crafter,     dir: GenVideo-Val/GenVideo-Val/Fake/Crafter,     split: test, label: 1, generator: Crafter}

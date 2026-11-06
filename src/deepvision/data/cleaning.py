@@ -85,8 +85,9 @@ def find_duplicates(cfg: DataConfig, st: pd.DataFrame, log) -> pd.DataFrame:
     if cand.empty:
         return st
     cand["md5"] = [_md5(cfg.raw_root / p) for p in cand["path"]]
-    # keep test before train so that a train copy of a test video is the one dropped
-    cand = cand.sort_values(["md5", "split", "path"], key=lambda s: s.map({"test": 0, "train": 1}) if s.name == "split" else s)
+    # keep test before train before train2 so that the later copy is the one dropped
+    rank = {"test": 0, "train": 1, "train2": 2}
+    cand = cand.sort_values(["md5", "split", "path"], key=lambda s: s.map(rank) if s.name == "split" else s)
     dup = cand[cand.duplicated("md5", keep="first")]
     first = cand.drop_duplicates("md5", keep="first").set_index("md5")["path"]
     n_excluded = 0

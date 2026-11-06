@@ -28,7 +28,7 @@ import numpy as np
 import pandas as pd
 from tqdm import tqdm
 
-from .config import LABEL_NAMES, DataConfig, add_config_args, config_from_args
+from .config import LABEL_NAMES, SPLITS, DataConfig, add_config_args, config_from_args
 from .io import setup_logging
 from .transforms import crop_center_by_percentage, demamba_crop_percentage
 
@@ -124,7 +124,7 @@ def convert_one(job: dict) -> dict:
 def main(argv=None) -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     add_config_args(ap)
-    ap.add_argument("--split", choices=["train", "test"], nargs="*", default=["train", "test"])
+    ap.add_argument("--split", choices=SPLITS, nargs="*", default=["train", "test"])
     args = ap.parse_args(argv)
     cfg = config_from_args(args)
     log = setup_logging(cfg.logs_dir / "clips.log")

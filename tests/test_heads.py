@@ -106,3 +106,18 @@ def test_run_one_without_val_ood_uses_test_reals_for_the_threshold(store, tmp_pa
     row = summary(tmp_path / "runs", "p2f").iloc[0]
     assert row["test_auroc"] == final["test"]["auroc"] and "val_ood_auroc" not in row
     assert summary(tmp_path / "runs", "p2").empty
+
+
+def test_load_sets_pools_train_and_train2(store):
+    out, splits = store
+    extra = write_store(out, "enc", "train2", 1, 100, 6, video_dim=4, seed=3)
+    extra = extra.assign(video_id="x" + extra["video_id"])
+    rows = pd.read_csv(out / "enc" / "train2" / "train2-00000.csv").assign(video_id=lambda d: "x" + d["video_id"])
+    rows.to_csv(out / "enc" / "train2" / "train2-00000.csv", index=False)
+    splits = pd.concat([splits.assign(split=splits["split"].replace({"holdout": "train", "ood_real": "train"})),
+                        extra.assign(split="train")], ignore_index=True)
+    for feature in ("enc", "enc:video"):
+        sets = load_sets(out, feature, splits, "cpu")
+        X, rows = sets["train"]
+        assert len(X) == len(rows) == 700 and set(rows["video_id"]) == set(splits.query("split == 'train'")["video_id"])
+        assert rows["shard"].str.startswith("train2-").sum() == 100

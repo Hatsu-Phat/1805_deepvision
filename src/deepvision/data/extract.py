@@ -31,7 +31,7 @@ from tqdm import tqdm
 
 from . import ffmpeg
 from .clips import build_clip, clip_options, clip_path_for, convert_one, load_clip_meta
-from .config import LABEL_NAMES, DataConfig, add_config_args, config_from_args
+from .config import LABEL_NAMES, SPLITS, DataConfig, add_config_args, config_from_args
 from .io import setup_logging
 from .sampling import sampling_rate, window_start
 
@@ -217,7 +217,7 @@ def collect_index(cfg: DataConfig, manifest: pd.DataFrame, clips: bool = False) 
 def main(argv=None) -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     add_config_args(ap)
-    ap.add_argument("--split", choices=["train", "test"], nargs="*", default=["train", "test"])
+    ap.add_argument("--split", choices=SPLITS, nargs="*", default=["train", "test"])
     ap.add_argument("--limit-per-generator", type=int, default=0, help="pilot mode: first N videos per generator")
     ap.add_argument("--generators", nargs="*", help="restrict to these generators")
     ap.add_argument("--tag", default="", help="suffix for the error/summary files")

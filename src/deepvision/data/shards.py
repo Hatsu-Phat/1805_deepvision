@@ -24,7 +24,7 @@ from typing import IO, Iterator
 import pandas as pd
 
 from .clips import clip_path_for, read_clip
-from .config import DataConfig, add_config_args, config_from_args
+from .config import SPLITS, DataConfig, add_config_args, config_from_args
 from .io import setup_logging
 
 
@@ -122,7 +122,7 @@ def build_split(cfg: DataConfig, split: str, log) -> None:
 def main(argv=None) -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     add_config_args(ap)
-    ap.add_argument("--split", choices=["train", "test"], nargs="*", default=["train", "test"])
+    ap.add_argument("--split", choices=SPLITS, nargs="*", default=["train", "test"])
     args = ap.parse_args(argv)
     cfg = config_from_args(args)
     log = setup_logging(cfg.logs_dir / "shards.log")

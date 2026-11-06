@@ -28,6 +28,7 @@ from typing import IO, Iterator
 import numpy as np
 import pandas as pd
 
+from .config import SPLITS
 from .dataset import decode_rgb
 from .sampling import uniform_indices
 from .shards import iter_shard
@@ -341,7 +342,7 @@ def benchmark(root: str, split: str, n_shards: int, workers: int, streams: int, 
 def main(argv=None) -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--root", required=True, help="rclone remote:path or local directory holding shards/")
-    ap.add_argument("--split", choices=["train", "test"], default="test")
+    ap.add_argument("--split", choices=SPLITS, default="test")
     ap.add_argument("--shards", type=int, default=1, help="read the first N shards")
     ap.add_argument("--workers", type=int, default=0, help="DataLoader workers (0 = this process)")
     ap.add_argument("--streams", type=int, default=2, help="shards open at once per worker")

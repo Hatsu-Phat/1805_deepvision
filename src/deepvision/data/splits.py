@@ -11,6 +11,8 @@ Evaluation sets (see eval_set): val_ood = holdout + ood_real; val_id; test.
     python -m deepvision.data.splits -c configs/data.yaml                      # v1: SEINE + 2% reals held out
     python -m deepvision.data.splits -c configs/data.yaml --version v2 --ood-real-frac 0 --holdout
                                        # v2: train on every train video, test only (user decision 2026-11-06)
+    ... --version v3 --ood-real-frac 0 --holdout   # v3: as v2, plus the extra Youku reals of train2
+The training pool is every <split>_index.csv of TRAIN_SPLITS that exists (train, and train2 once built).
 """
 from __future__ import annotations
 
@@ -20,7 +22,7 @@ import json
 import numpy as np
 import pandas as pd
 
-from .config import add_config_args, config_from_args
+from .config import TRAIN_SPLITS, add_config_args, config_from_args
 
 COLUMNS = ["video_id", "key", "shard", "label", "generator", "split"]
 EVAL_SETS = ("val_id", "val_ood", "test")
@@ -91,7 +93,8 @@ def main(argv=None) -> None:
     ap.add_argument("--version", default="v1")
     args = ap.parse_args(argv)
     cfg = config_from_args(args)
-    splits = build_splits(pd.read_csv(cfg.shards_dir / "train_index.csv"), pd.read_csv(cfg.shards_dir / "test_index.csv"),
+    pool = [pd.read_csv(p) for s in TRAIN_SPLITS if (p := cfg.shards_dir / f"{s}_index.csv").exists()]
+    splits = build_splits(pd.concat(pool, ignore_index=True), pd.read_csv(cfg.shards_dir / "test_index.csv"),
                           args.ood_real_frac, tuple(args.holdout), args.val_frac, args.seed)
     out = cfg.manifest_dir / f"splits_{args.version}.csv"
     splits.to_csv(out, index=False)

@@ -34,7 +34,7 @@ def crop_center_by_percentage(image: np.ndarray, percentage: float) -> np.ndarra
 
 def demamba_crop_percentage(split: str, generator: str, label: int) -> float:
     """Crop ratio DeMamba applies to a video (0.0 means no crop)."""
-    if split == "train":
+    if split in ("train", "train2"):
         return 0.15 if (label == 0 and generator.lower() == "youku") else 0.0
     return 0.10
 

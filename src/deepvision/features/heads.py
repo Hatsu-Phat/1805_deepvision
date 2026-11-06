@@ -35,13 +35,14 @@ import torch
 from torch import nn
 from torch.utils.data import TensorDataset
 
+from ..data.config import TRAIN_SPLITS
 from ..data.splits import eval_set
 from ..data.stream import read_text
 from ..eval.metrics import binary_metrics, evaluate, threshold_at_tnr
 from ..train.loop import Trainer, TrainConfig, predict
 from ..train.run import expand, prepare_run, set_seed, setup_device
 from .encoders import ENCODERS
-from .store import load_features
+from .store import load_features, parse_name
 
 LOG = logging.getLogger("deepvision")
 FEATURES = (*ENCODERS, "xclip_b32:video")
@@ -90,13 +91,17 @@ def read_splits(path: str, rclone: str = "rclone") -> pd.DataFrame:
 
 def load_sets(out: Path, feature: str, splits: pd.DataFrame, device) -> dict:
     """train / test / val_ood (when the splits hold one out) tensors and their rows (labels and generators
-    from the feature index)."""
+    from the feature index). Train videos are read from every feature split of TRAIN_SPLITS that exists."""
     sets = {}
-    for name, split in (("train", "train"), ("val_ood", "train"), ("test", "test")):
+    pool = [s for s in TRAIN_SPLITS if (Path(out) / parse_name(feature)[0] / s).exists()]
+    for name, fsplits in (("train", pool), ("val_ood", pool), ("test", ["test"])):
         ids = set(eval_set(splits, name)["video_id"])
         if not ids and name == "val_ood":
             continue
-        X, rows = load_features(out, feature, split, "mean", device, keep=ids)
+        parts = [load_features(out, feature, s, "mean", device, keep=ids) for s in fsplits]
+        X = parts[0][0] if len(parts) == 1 else torch.cat([p[0] for p in parts])
+        rows = pd.concat([p[1] for p in parts], ignore_index=True)
+        del parts
         missing = len(ids) - len(rows)
         if missing:
             LOG.warning("%s/%s: %d videos of the split have no features yet", feature, name, missing)

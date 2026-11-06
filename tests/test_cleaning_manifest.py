@@ -67,6 +67,20 @@ def test_duplicates_prefer_test_copy(tmp_path):
     assert st.loc["train/z.mp4", "status"] == "ok"
 
 
+def test_duplicates_keep_train_before_train2(tmp_path):
+    cfg = make_cfg(tmp_path)
+    for name in ("more/a.mp4", "base/b.mp4"):
+        p = cfg.raw_root / name
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_bytes(b"same")
+    st = pd.DataFrame([
+        dict(path="more/a.mp4", source="m", split="train2", label=0, generator="youku", size_bytes=4, status="ok", reason=""),
+        dict(path="base/b.mp4", source="s", split="train", label=0, generator="youku", size_bytes=4, status="ok", reason=""),
+    ])
+    st = find_duplicates(cfg, st, LOG).set_index("path")
+    assert st.loc["base/b.mp4", "status"] == "ok" and st.loc["more/a.mp4", "status"] == "excluded"
+
+
 def test_quarantine_and_restore_roundtrip(tmp_path):
     cfg = make_cfg(tmp_path)
     src = cfg.raw_root / "G" / "bad.mp4"
