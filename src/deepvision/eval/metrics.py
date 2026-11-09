@@ -7,6 +7,8 @@
     bootstrap_auroc_ci    stratified bootstrap CI
     per_generator         AUROC of each fake generator against all reals of the set, recall, CI
     demamba_protocol      GenVideo protocol of DeMamba: per-generator R / P / F1 / AP, then the mean over generators
+    vif_paired_protocol   ViF-Bench protocol of Skyra: each fake paired with the real of the same name, per-generator
+                          balanced acc / recall / F1, then the mean over generators
     evaluate              everything above for one prediction table
 """
 from __future__ import annotations
@@ -137,9 +139,38 @@ def demamba_protocol(df: pd.DataFrame, threshold: float = 0.5, n_real_ref: int =
     return out
 
 
+def vif_paired_protocol(df: pd.DataFrame, threshold: float = 0.5) -> dict:
+    """ViF-Bench evaluation of Skyra (github.com/JoeLeelyf/Skyra, eval/inference_end2end/eval_vifbench.py, read
+    2026-11-09). Every fake of generator g whose video_id (file name) is also the video_id of a real forms one pair;
+    the same real is reused for every generator. Per generator, with label 1 = fake and fake when score > threshold:
+    balanced accuracy, recall and F1 (sklearn, pos_label=1) over the 2 * n_pairs predictions; the reported number is
+    the unweighted mean over generators with at least one pair. AP / AUROC on the same pairs are extras (not upstream).
+    """
+    reals = df[df["label"] == 0].drop_duplicates("video_id", keep="last").set_index("video_id")["score"]
+    rows = []
+    for gen, fakes in df[df["label"] == 1].groupby("generator", sort=True):
+        fakes = fakes[fakes["video_id"].isin(reals.index)]
+        n = len(fakes)
+        if not n:
+            continue
+        y = np.r_[np.zeros(n), np.ones(n)].astype(np.int64)
+        s = np.r_[reals.loc[fakes["video_id"]].to_numpy(), fakes["score"].to_numpy()]
+        tp, fp = int(((s > threshold) & (y == 1)).sum()), int(((s > threshold) & (y == 0)).sum())
+        rec = tp / n
+        prec = tp / (tp + fp) if tp + fp else 0.0
+        rows.append({"generator": gen, "n_pairs": n, "bacc": 0.5 * (rec + float((s[:n] <= threshold).mean())),
+                     "recall": rec, "f1": 2 * prec * rec / (prec + rec) if prec + rec else 0.0,
+                     "real_acc": float((s[:n] <= threshold).mean()), "ap": average_precision(y, s), "auroc": auroc(y, s)})
+    out = {"threshold": float(threshold), "n_real": int(len(reals)), "per_generator": rows}
+    for k in ("bacc", "recall", "f1", "real_acc", "ap", "auroc"):
+        out[f"avg_{k}"] = float(np.mean([r[k] for r in rows])) if rows else float("nan")
+    return out
+
+
 def evaluate(df: pd.DataFrame, threshold: float = 0.5, tnr_threshold: float | None = None,
-             n_boot: int = 1000, seed: int = 0) -> dict:
-    """df: label, score[, generator]. tnr_threshold: e.g. threshold_at_tnr(val reals) for the TNR-95 protocol."""
+             n_boot: int = 1000, seed: int = 0, paired: bool = False) -> dict:
+    """df: label, score[, generator]. tnr_threshold: e.g. threshold_at_tnr(val reals) for the TNR-95 protocol.
+    paired: also run vif_paired_protocol (needs video_id; for ViF-Bench, where fakes share the names of reals)."""
     y, s = df["label"].to_numpy(), df["score"].to_numpy()
     out = binary_metrics(y, s, threshold)
     out["auroc_ci"] = list(bootstrap_auroc_ci(y, s, n_boot, seed=seed))
@@ -149,4 +180,6 @@ def evaluate(df: pd.DataFrame, threshold: float = 0.5, tnr_threshold: float | No
         out["per_generator"] = per_generator(df, threshold, n_boot, seed).to_dict("records")
         if (df["label"] == 0).any() and (df["label"] == 1).any():
             out["demamba"] = demamba_protocol(df, threshold)
+            if paired:
+                out["vif_paired"] = vif_paired_protocol(df, threshold)
     return out

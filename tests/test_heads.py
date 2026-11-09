@@ -6,7 +6,8 @@ import pytest
 
 torch = pytest.importorskip("torch")
 
-from deepvision.features.heads import build_head, feature_stats, load_sets, run_one, summary  # noqa: E402
+from deepvision.features.heads import (build_head, crosseval, feature_stats, load_head, load_sets, run_one,  # noqa: E402
+                                       summary)
 from deepvision.features.store import load_features  # noqa: E402
 
 
@@ -138,3 +139,68 @@ def test_run_one_selects_on_accuracy_and_reports_the_demamba_protocol(store, tmp
     assert row["test_demamba_avg_ap"] == dm["avg_ap"] and row["test_demamba_real_acc"] == dm["real_acc"]
     metrics = [json.loads(l) for l in (tmp_path / "runs" / "p2d_enc_mlp_s0" / "metrics.jsonl").read_text().splitlines()]
     assert any(m.get("set") == "test" and "demamba_avg_ap" in m for m in metrics)
+
+
+def write_paired_store(out, encoder, split, n_real, gens, dim, seed=0):
+    """ViF-Bench-like store: every fake reuses the video_id of one real (the pair)."""
+    rng = np.random.default_rng(seed)
+    d = out / encoder / split
+    d.mkdir(parents=True)
+    names = [f"v{i}" for i in range(n_real)]
+    ids, labels, generators = list(names), [0] * n_real, ["ViF-Real"] * n_real
+    for g in gens:
+        pick = rng.choice(names, n_real // 2, replace=False).tolist()
+        ids += pick
+        labels += [1] * len(pick)
+        generators += [g] * len(pick)
+    labels = np.array(labels)
+    feats = rng.normal(size=(len(ids), 8, dim)) + labels[:, None, None] * 1.0
+    feats[:, :, 0] = np.arange(8)  # as write_store: constant after pooling
+    np.save(d / f"{split}-00000.npy", feats.astype(np.float16))
+    keys = [f"{g}/{i}" for g, i in zip(generators, ids)]
+    pd.DataFrame({"video_id": ids, "label": labels, "generator": generators, "key": keys}).to_csv(
+        d / f"{split}-00000.csv", index=False)
+
+
+def test_crosseval_scores_finished_runs_zero_shot_with_the_paired_protocol(store, tmp_path):
+    out, splits = store
+    write_paired_store(out, "enc", "vif_test", 40, ["sora-2", "kling-v1"], 6, seed=5)
+    splits = splits.assign(split=splits["split"].replace({"holdout": "train", "ood_real": "train"}))
+    cfg = {"prefix": "p2d", "runs_root": str(tmp_path / "runs"), "n_boot": 20, "head": {"hidden": 16, "dropout": 0.1},
+           "train": {"epochs": 2, "batch_size": 64, "lr": 0.01, "sampler": "balanced", "log_every": 5,
+                     "select": "test/acc", "amp": "off"}}
+    run_one(cfg, "enc", "mlp", 0, load_sets(out, "enc", splits, "cpu"), "cpu")
+    run_dir = tmp_path / "runs" / "p2d_enc_mlp_s0"
+    model = load_head(run_dir, "cpu")
+    assert model[1][0].out_features == 16 and not model.training
+    test = load_sets(out, "enc", None, "cpu", None, "vif_test")["test"]
+    assert len(test[1]) == 80 and set(load_sets(out, "enc", None, "cpu", None, "vif_test")) == {"test"}
+    [res] = crosseval(tmp_path / "runs", "p2d", "enc", ["mlp"], test, "vif_test", "cpu", paired=True, n_boot=10)
+    v = res["vif_test"]["vif_paired"]
+    assert [r["n_pairs"] for r in v["per_generator"]] == [20, 20] and 0 <= v["avg_bacc"] <= 1
+    assert res["vif_test"]["auroc"] > 0.8  # same shift as the training data
+    preds = pd.read_csv(run_dir / "predictions_vif_test.csv")
+    assert len(preds) == 80
+    cached = json.loads((run_dir / "crosseval_vif_test.json").read_text())
+    assert crosseval(tmp_path / "runs", "p2d", "enc", ["mlp"], test, "vif_test", "cpu", paired=True) == [cached]
+    row = summary(tmp_path / "runs", "p2d", "vif_test").iloc[0]
+    assert row["vif_test_vif_avg_bacc"] == v["avg_bacc"] and row["vif_test_auroc"] == res["vif_test"]["auroc"]
+
+
+def test_run_one_trains_on_whole_feature_splits_and_selects_on_paired_bacc(tmp_path):
+    out = tmp_path / "feat"
+    write_store(out, "enc", "vif_train", 1, 200, 6, seed=2)
+    write_paired_store(out, "enc", "vif_test", 40, ["sora-2", "kling-v1"], 6, seed=5)
+    sets = load_sets(out, "enc", None, "cpu", ["vif_train"], "vif_test")
+    assert len(sets["train"][1]) == 200 and len(sets["test"][1]) == 80
+    cfg = {"prefix": "p2v", "runs_root": str(tmp_path / "runs"), "n_boot": 20, "paired": True,
+           "head": {"hidden": 16, "dropout": 0.1},
+           "train": {"epochs": 2, "batch_size": 32, "lr": 0.01, "sampler": "balanced", "log_every": 5,
+                     "select": "test/vif_avg_bacc", "amp": "off"}}
+    final = run_one(cfg, "enc", "mlp", 0, sets, "cpu")
+    v = final["test"]["vif_paired"]
+    assert len(v["per_generator"]) == 2 and final["test"]["auroc"] > 0.8
+    metrics = [json.loads(l) for l in (tmp_path / "runs" / "p2v_enc_mlp_s0" / "metrics.jsonl").read_text().splitlines()]
+    best = max(m["vif_avg_bacc"] for m in metrics if m.get("set") == "test")
+    assert v["avg_bacc"] == pytest.approx(best)
+    assert summary(tmp_path / "runs", "p2v").iloc[0]["test_vif_avg_bacc"] == v["avg_bacc"]

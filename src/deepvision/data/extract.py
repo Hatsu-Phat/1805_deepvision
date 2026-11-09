@@ -266,7 +266,7 @@ def main(argv=None) -> None:
                     done.append(res)
                 if i % 2000 == 1999:
                     save(done, errors)  # keep partial results if the run is killed
-                    if min_free and shutil.disk_usage(cfg.frames_dir).free < min_free:
+                    if min_free and shutil.disk_usage(cfg.out_root).free < min_free:
                         log.warning("free disk space below %.0f GB, stopping", min_free / 2**30)
                         stopped = True
                         break

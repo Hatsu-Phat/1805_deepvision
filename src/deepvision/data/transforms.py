@@ -13,7 +13,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-import albumentations as A
 import cv2
 import numpy as np
 
@@ -48,6 +47,8 @@ class FrameTransform:
     normalize: bool = True
 
     def __post_init__(self):
+        import albumentations as A  # imported here: the clip pipeline (crop + cv2 resize) does not need it
+
         ops = [A.Resize(self.size, self.size, interpolation=self.interpolation)]
         if self.normalize:
             ops.append(A.Normalize(mean=self.mean, std=self.std, max_pixel_value=255.0, p=1.0))

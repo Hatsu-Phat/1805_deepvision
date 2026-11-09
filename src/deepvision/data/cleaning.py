@@ -23,7 +23,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from .config import DataConfig, add_config_args, config_from_args
+from .config import EVAL_SPLITS, DataConfig, add_config_args, config_from_args
 from .io import setup_logging
 
 MOVES_COLUMNS = ["time", "path", "src", "dst", "reason", "action"]
@@ -52,7 +52,7 @@ def _quick_hash(path: Path, chunk: int = 1 << 16) -> str:
 def classify(inv: pd.DataFrame, min_duration: float, min_side: int) -> pd.DataFrame:
     st = inv[["path", "source", "split", "label", "generator", "size_bytes"]].copy()
     st["status"], st["reason"], st["note"] = "ok", "", ""
-    is_test = st["split"] == "test"
+    is_test = st["split"].isin(EVAL_SPLITS)
 
     def mark(mask, status, reason):
         sel = mask & (st["status"] == "ok")
@@ -86,14 +86,14 @@ def find_duplicates(cfg: DataConfig, st: pd.DataFrame, log) -> pd.DataFrame:
         return st
     cand["md5"] = [_md5(cfg.raw_root / p) for p in cand["path"]]
     # keep test before train before train2 so that the later copy is the one dropped
-    rank = {"test": 0, "train": 1, "train2": 2}
+    rank = {"test": 0, "vif_test": 0, "train": 1, "train2": 2, "vif_train": 3}
     cand = cand.sort_values(["md5", "split", "path"], key=lambda s: s.map(rank) if s.name == "split" else s)
     dup = cand[cand.duplicated("md5", keep="first")]
     first = cand.drop_duplicates("md5", keep="first").set_index("md5")["path"]
     n_excluded = 0
     for i, row in dup.iterrows():
         reason = f"duplicate of {first[row['md5']]}"
-        if row["split"] == "test":  # duplicates inside the benchmark are kept as-is
+        if row["split"] in EVAL_SPLITS:  # duplicates inside the benchmark are kept as-is
             st.loc[i, "note"] = reason
             continue
         st.loc[i, "status"] = "excluded"

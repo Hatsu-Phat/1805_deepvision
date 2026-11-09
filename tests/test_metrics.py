@@ -6,7 +6,7 @@ import pytest
 from sklearn.metrics import balanced_accuracy_score, f1_score, roc_auc_score
 
 from deepvision.eval.metrics import (auroc, binary_metrics, bootstrap_auroc_ci, demamba_protocol, evaluate,
-                                     per_generator, threshold_at_tnr)
+                                     per_generator, threshold_at_tnr, vif_paired_protocol)
 
 
 @pytest.fixture
@@ -98,3 +98,48 @@ def test_demamba_protocol_matches_upstream_loop():
     # far fewer fakes per generator than reals: per-generator F1 is well below the pooled F1
     assert got["avg_f1"] < binary_metrics(df["label"], df["score"])["f1"]
     assert "demamba" in evaluate(df, n_boot=10)
+
+
+def _vif_reference(df):
+    """Port of the upstream ViF-Bench metrics (Skyra, eval/inference_end2end/eval_vifbench.py): pairs by name,
+    hard labels, sklearn balanced accuracy / recall / F1 per generator, unweighted mean."""
+    from sklearn.metrics import recall_score
+    pred = lambda s: "fake" if s > 0.5 else "real"
+    pairs = {}
+    for r in df.itertuples():
+        pairs.setdefault(r.video_id, {})["real_pred" if r.label == 0 else r.generator] = pred(r.score)
+    by_gen = {}
+    for preds in pairs.values():
+        if "real_pred" not in preds:
+            continue
+        for g, p in preds.items():
+            if g != "real_pred":
+                by_gen.setdefault(g, []).append((preds["real_pred"], p))
+    encode = lambda x: 0 if x == "real" else 1
+    out = {}
+    for g, ps in by_gen.items():
+        yt = [0, 1] * len(ps)
+        yp = [encode(v) for pr in ps for v in pr]
+        out[g] = (balanced_accuracy_score(yt, yp), recall_score(yt, yp, pos_label=1, zero_division=0),
+                  f1_score(yt, yp, pos_label=1, zero_division=0))
+    return out
+
+
+def test_vif_paired_protocol_matches_upstream():
+    rng = np.random.default_rng(0)
+    names = [f"v{i}" for i in range(165)]
+    real = pd.DataFrame({"video_id": names, "label": 0, "generator": "ViF-Real", "score": rng.beta(2, 4, 165)})
+    fakes = [pd.DataFrame({"video_id": rng.choice(names, n, replace=False), "label": 1, "generator": g,
+                           "score": rng.beta(a, 2, n)}) for g, a, n in (("sora-2", 1, 150), ("kling-v1", 3, 141), ("hailuo", 6, 165))]
+    unpaired = pd.DataFrame({"video_id": ["x1", "x2"], "label": 1, "generator": "hailuo", "score": [0.9, 0.1]})
+    df = pd.concat([real, *fakes, unpaired], ignore_index=True)
+    got = vif_paired_protocol(df)
+    ref = _vif_reference(df)
+    assert {r["generator"] for r in got["per_generator"]} == set(ref)
+    for row in got["per_generator"]:
+        bacc, rec, f1 = ref[row["generator"]]
+        assert row["bacc"] == pytest.approx(bacc) and row["recall"] == pytest.approx(rec) and row["f1"] == pytest.approx(f1)
+    assert got["avg_bacc"] == pytest.approx(np.mean([v[0] for v in ref.values()]))
+    assert got["avg_f1"] == pytest.approx(np.mean([v[2] for v in ref.values()]))
+    assert [r["n_pairs"] for r in got["per_generator"]] == [165, 141, 150]  # unpaired fakes are left out
+    assert "vif_paired" in evaluate(df, n_boot=10, paired=True) and "vif_paired" not in evaluate(df, n_boot=10)
