@@ -13,11 +13,14 @@ ckpt/{last,best}.pt, predictions_<set>.csv and final.json with
     TNR-95: same metrics at the threshold that keeps 95% of the reals below it, the val_ood reals when the
             splits have a val_ood, otherwise the test reals (then it is TPR at 5% FPR on test)
     bootstrap 95% CI of AUROC, per-generator AUROC / AP / recall
+    demamba: GenVideo protocol of DeMamba (per-generator R / P / F1 / AP, FP shared over all reals, mean)
 Finished runs are skipped, so the command can be rerun after an interruption.
 
     python -m deepvision.features.heads --features resnet50 xclip_b32 xclip_b32:video --heads linear mlp --seeds 0 1 2
     python -m deepvision.features.heads --summary      # one row per run -> <runs_root>/<prefix>_summary.csv
     python -m deepvision.features.heads --splits gdrive:DeepVision/dataset_v1/manifests/splits_v2.csv --prefix p2f
+    # DeMamba protocol (2026-11-09): MLP only, checkpoint picked on overall test accuracy at 0.5 like upstream
+    python -m deepvision.features.heads --splits .../splits_v3.csv --heads mlp --set select=test/acc --prefix p2d
 """
 from __future__ import annotations
 
@@ -38,7 +41,7 @@ from torch.utils.data import TensorDataset
 from ..data.config import TRAIN_SPLITS
 from ..data.splits import eval_set
 from ..data.stream import read_text
-from ..eval.metrics import binary_metrics, evaluate, threshold_at_tnr
+from ..eval.metrics import binary_metrics, demamba_protocol, evaluate, threshold_at_tnr
 from ..train.loop import Trainer, TrainConfig, predict
 from ..train.run import expand, prepare_run, set_seed, setup_device
 from .encoders import ENCODERS
@@ -126,7 +129,14 @@ def run_one(cfg: dict, feature: str, head: str, seed: int, sets: dict, device) -
                 for k in ("test", "val_ood") if k in sets}
 
     def evaluate_fn(m):
-        return {k: binary_metrics(r["label"], predict(m, ds, 8192, device, tcfg.amp)) for k, (ds, r) in evalsets.items()}
+        out = {}
+        for k, (ds, r) in evalsets.items():
+            s = predict(m, ds, 8192, device, tcfg.amp)
+            out[k] = binary_metrics(r["label"], s)
+            if "generator" in r and (r["label"] == 0).any() and (r["label"] == 1).any():
+                d = demamba_protocol(r[["label", "generator"]].assign(score=s))
+                out[k] |= {f"demamba_{x}": d[f"avg_{x}"] for x in ("recall", "precision", "f1", "ap", "auroc")}
+        return out
 
     t0 = time.time()
     Trainer(model, tcfg, run_dir, device, evaluate_fn).fit(TensorDataset(Xtr, ytr), rtr["label"].to_numpy())
@@ -144,8 +154,10 @@ def run_one(cfg: dict, feature: str, head: str, seed: int, sets: dict, device) -
         df.to_csv(run_dir / f"predictions_{k}.csv", index=False)
         final[k] = evaluate(df, 0.5, t95, n_boot=cfg.get("n_boot", 1000), seed=seed)
     (run_dir / "final.json").write_text(json.dumps(final, indent=2, default=float))
-    log.info("%s: test AUROC %.4f AP %.4f F1 %.4f | val_ood AUROC %.4f", run_id, final["test"]["auroc"],
-             final["test"]["ap"], final["test"]["f1"], final.get("val_ood", {}).get("auroc", float("nan")))
+    dm = final["test"].get("demamba", {})
+    log.info("%s: test AUROC %.4f AP %.4f F1 %.4f | DeMamba avg R %.4f F1 %.4f AP %.4f", run_id, final["test"]["auroc"],
+             final["test"]["ap"], final["test"]["f1"], dm.get("avg_recall", float("nan")), dm.get("avg_f1", float("nan")),
+             dm.get("avg_ap", float("nan")))
     return final
 
 
@@ -161,6 +173,10 @@ def summary(runs_root: Path, prefix: str = "p2") -> pd.DataFrame:
             row |= {f"{s}_{k}": f[s][k] for k in SUMMARY_KEYS}
             row |= {f"{s}_auroc_ci_low": f[s]["auroc_ci"][0], f"{s}_auroc_ci_high": f[s]["auroc_ci"][1]}
             row |= {f"{s}_tnr95_{k}": f[s]["at_tnr"][k] for k in ("acc", "bacc", "f1", "recall", "tnr")}
+            if "demamba" in f[s]:
+                d = f[s]["demamba"]
+                row |= {f"{s}_demamba_real_acc": d["real_acc"]}
+                row |= {f"{s}_demamba_avg_{k}": d[f"avg_{k}"] for k in ("recall", "precision", "f1", "ap", "auroc")}
         rows.append(row)
     return pd.DataFrame(rows)
 
@@ -183,7 +199,8 @@ def main(argv=None) -> None:
     if args.summary:
         df = summary(runs_root, args.prefix)
         df.to_csv(runs_root / f"{args.prefix}_summary.csv", index=False)
-        cols = [c for c in ("test_auroc", "test_ap", "test_f1", "val_ood_auroc") if c in df]
+        cols = [c for c in ("test_auroc", "test_ap", "test_f1", "test_demamba_avg_f1", "test_demamba_avg_ap", "val_ood_auroc")
+                if c in df]
         print(df.groupby(["feature", "head"])[cols].agg(["mean", "std"]))
         return
     import yaml

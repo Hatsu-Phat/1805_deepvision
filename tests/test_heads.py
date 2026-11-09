@@ -121,3 +121,20 @@ def test_load_sets_pools_train_and_train2(store):
         X, rows = sets["train"]
         assert len(X) == len(rows) == 700 and set(rows["video_id"]) == set(splits.query("split == 'train'")["video_id"])
         assert rows["shard"].str.startswith("train2-").sum() == 100
+
+
+def test_run_one_selects_on_accuracy_and_reports_the_demamba_protocol(store, tmp_path):
+    out, splits = store
+    splits = splits.assign(split=splits["split"].replace({"holdout": "train", "ood_real": "train"}))
+    sets = load_sets(out, "enc", splits, "cpu")
+    cfg = {"prefix": "p2d", "runs_root": str(tmp_path / "runs"), "n_boot": 20, "head": {"hidden": 16, "dropout": 0.1},
+           "train": {"epochs": 2, "batch_size": 64, "lr": 0.01, "sampler": "balanced", "log_every": 5,
+                     "select": "test/acc", "amp": "off"}}
+    final = run_one(cfg, "enc", "mlp", 0, sets, "cpu")
+    dm = final["test"]["demamba"]
+    fakes = sets["test"][1].query("label == 1")["generator"].nunique()
+    assert len(dm["per_generator"]) == fakes and 0 <= dm["avg_f1"] <= 1 and 0 <= dm["avg_ap"] <= 1
+    row = summary(tmp_path / "runs", "p2d").iloc[0]
+    assert row["test_demamba_avg_ap"] == dm["avg_ap"] and row["test_demamba_real_acc"] == dm["real_acc"]
+    metrics = [json.loads(l) for l in (tmp_path / "runs" / "p2d_enc_mlp_s0" / "metrics.jsonl").read_text().splitlines()]
+    assert any("test/demamba_avg_ap" in json.dumps(m) or "demamba_avg_ap" in json.dumps(m) for m in metrics)

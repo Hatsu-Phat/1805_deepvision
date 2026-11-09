@@ -6,6 +6,7 @@
     threshold_at_tnr      threshold that keeps `tnr` of the reals below it (fit on val reals)
     bootstrap_auroc_ci    stratified bootstrap CI
     per_generator         AUROC of each fake generator against all reals of the set, recall, CI
+    demamba_protocol      GenVideo protocol of DeMamba: per-generator R / P / F1 / AP, then the mean over generators
     evaluate              everything above for one prediction table
 """
 from __future__ import annotations
@@ -106,6 +107,36 @@ def per_generator(df: pd.DataFrame, threshold: float = 0.5, n_boot: int = 1000, 
     return pd.DataFrame(rows)
 
 
+def demamba_protocol(df: pd.DataFrame, threshold: float = 0.5, n_real_ref: int = 10000) -> dict:
+    """GenVideo evaluation of DeMamba (github.com/chenhaoxing/DeMamba, util.py train_one_epoch, commit 646db28).
+
+    A video is called fake when score > threshold (strict, as upstream). The false positives are shared by every
+    generator: FP = int((1 - real accuracy over ALL reals) * n_real_ref). For each fake generator g with N_g videos:
+    TP = int(recall_g * N_g), FN = int((1 - recall_g) * N_g), P = TP / (TP + FP), R = TP / (TP + FN), F1 = 2PR/(P+R),
+    AP_g (and AUC_g, not in upstream) on [all reals + fakes of g]. The paper reports the mean over generators.
+    Upstream hard-codes N_g; here N_g is the count in df.
+    """
+    reals = df[df["label"] == 0]
+    real_acc = float((reals["score"] <= threshold).mean())
+    fp = int((1.0 - real_acc) * n_real_ref)
+    rows = []
+    for gen, fakes in df[df["label"] == 1].groupby("generator", sort=True):
+        n = len(fakes)
+        rec = float((fakes["score"] > threshold).mean())
+        tp, fn = int(rec * n), int((1.0 - rec) * n)
+        p = tp / (tp + fp) if tp + fp else 0.0
+        r = tp / (tp + fn) if tp + fn else 0.0
+        f1 = 2 * p * r / (p + r) if p + r else 0.0
+        y = np.r_[np.ones(n), np.zeros(len(reals))]
+        s = np.r_[fakes["score"].to_numpy(), reals["score"].to_numpy()]
+        rows.append({"generator": gen, "n": n, "tp": tp, "fn": fn, "recall": r, "precision": p, "f1": f1,
+                     "ap": average_precision(y, s), "auroc": auroc(y, s)})
+    out = {"threshold": float(threshold), "n_real": len(reals), "real_acc": real_acc, "fp": fp, "per_generator": rows}
+    for k in ("recall", "precision", "f1", "ap", "auroc"):
+        out[f"avg_{k}"] = float(np.mean([r[k] for r in rows])) if rows else float("nan")
+    return out
+
+
 def evaluate(df: pd.DataFrame, threshold: float = 0.5, tnr_threshold: float | None = None,
              n_boot: int = 1000, seed: int = 0) -> dict:
     """df: label, score[, generator]. tnr_threshold: e.g. threshold_at_tnr(val reals) for the TNR-95 protocol."""
@@ -116,4 +147,6 @@ def evaluate(df: pd.DataFrame, threshold: float = 0.5, tnr_threshold: float | No
         out["at_tnr"] = binary_metrics(y, s, tnr_threshold)
     if "generator" in df:
         out["per_generator"] = per_generator(df, threshold, n_boot, seed).to_dict("records")
+        if (df["label"] == 0).any() and (df["label"] == 1).any():
+            out["demamba"] = demamba_protocol(df, threshold)
     return out
