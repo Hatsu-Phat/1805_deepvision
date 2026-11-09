@@ -135,7 +135,7 @@ def run_one(cfg: dict, feature: str, head: str, seed: int, sets: dict, device) -
             out[k] = binary_metrics(r["label"], s)
             if "generator" in r and (r["label"] == 0).any() and (r["label"] == 1).any():
                 d = demamba_protocol(r[["label", "generator"]].assign(score=s))
-                out[k] |= {f"demamba_{x}": d[f"avg_{x}"] for x in ("recall", "precision", "f1", "ap", "auroc")}
+                out[k] |= {f"demamba_avg_{x}": d[f"avg_{x}"] for x in ("recall", "precision", "f1", "ap", "auroc")}
         return out
 
     t0 = time.time()

@@ -137,4 +137,4 @@ def test_run_one_selects_on_accuracy_and_reports_the_demamba_protocol(store, tmp
     row = summary(tmp_path / "runs", "p2d").iloc[0]
     assert row["test_demamba_avg_ap"] == dm["avg_ap"] and row["test_demamba_real_acc"] == dm["real_acc"]
     metrics = [json.loads(l) for l in (tmp_path / "runs" / "p2d_enc_mlp_s0" / "metrics.jsonl").read_text().splitlines()]
-    assert any("test/demamba_avg_ap" in json.dumps(m) or "demamba_avg_ap" in json.dumps(m) for m in metrics)
+    assert any(m.get("set") == "test" and "demamba_avg_ap" in m for m in metrics)
