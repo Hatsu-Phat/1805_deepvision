@@ -106,7 +106,7 @@ def test_upload_writes_index_and_card(tmp_path, monkeypatch):
     assert pd.read_csv(tmp_path / "a/test/index.csv")["shard"].tolist() == ["test-00000.tar"] * 2
 
 
-@pytest.mark.parametrize("name", ["resnet50", "effnetv2_b0", "convnext_t", "vit_ti16", "dinov2_s14", "swin_t"])
+@pytest.mark.parametrize("name", ["resnet50", "effnetv2_b0", "convnext_t", "vit_ti16", "dinov2_s14", "swin_t", "vit_b16"])
 def test_timm_encoders_random_weights(name):
     torch = pytest.importorskip("torch")
     pytest.importorskip("timm")

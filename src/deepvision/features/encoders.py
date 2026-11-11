@@ -1,4 +1,4 @@
-"""The 7 frozen encoders of Phase 2 behind one interface.
+"""The frozen encoders of Phase 2 behind one interface (7 from 2026-11-05, vit_b16 added 2026-11-11).
 
     enc = build_encoder("resnet50").to("cuda")
     out = enc(frames)   # frames: uint8 (B, T, 3, H, W) RGB in [0, 255], already 224x224 (Phase 1 clips)
@@ -27,6 +27,8 @@ SPECS = {
     "dinov2_s14": ("timm", "vit_small_patch14_dinov2.lvd142m", {"img_size": 224}, "CLS token"),
     "xclip_b32": ("xclip", "microsoft/xclip-base-patch32", {}, "per frame: projected CLS; video: MIT output"),
     "swin_t": ("timm", "swin_tiny_patch4_window7_224.ms_in1k", {}, "global average pool"),
+    # added 2026-11-11: same AugReg in21k -> in1k recipe as vit_ti16, so the pair isolates model size
+    "vit_b16": ("timm", "vit_base_patch16_224.augreg_in21k_ft_in1k", {}, "CLS token"),
 }
 ENCODERS = tuple(SPECS)
 

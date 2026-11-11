@@ -27,6 +27,8 @@ Finished runs are skipped, so the command can be rerun after an interruption.
     # zero-shot: score the best checkpoints of finished runs (e.g. p2d, trained on GenVideo) on ViF-Bench
     python -m deepvision.features.heads --crosseval p2d --test-on vif_test --paired --heads mlp
     python -m deepvision.features.heads --summary --prefix p2d --crosseval-tag vif_test
+    # the other way (2026-11-11): ViF-CoT-4K heads on the GenVideo test split, under another name
+    python -m deepvision.features.heads --crosseval p2v --test-on test --crosseval-tag genvideo_test --heads mlp
 """
 from __future__ import annotations
 
@@ -270,7 +272,8 @@ def main(argv=None) -> None:
     ap.add_argument("--paired", action="store_true", help="also score the ViF-Bench paired protocol")
     ap.add_argument("--crosseval", default=None, metavar="PREFIX",
                     help="no training: score the finished runs PREFIX_* on --test-on (zero-shot)")
-    ap.add_argument("--crosseval-tag", default=None, help="with --summary: summarize crosseval_<tag>.json")
+    ap.add_argument("--crosseval-tag", default=None,
+                    help="name of the crosseval results (default: --test-on); with --summary: summarize crosseval_<tag>.json")
     args = ap.parse_args(argv)
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     runs_root = expand(args.runs_root)
@@ -298,7 +301,8 @@ def main(argv=None) -> None:
     for feature in args.features:
         if args.crosseval:
             test = load_sets(expand(args.out), feature, None, device, None, args.test_on)["test"]
-            crosseval(runs_root, args.crosseval, feature, args.heads, test, args.test_on, device, args.paired, args.n_boot)
+            crosseval(runs_root, args.crosseval, feature, args.heads, test, args.crosseval_tag or args.test_on, device,
+                      args.paired, args.n_boot)
             del test
             continue
         sets = load_sets(expand(args.out), feature, splits, device, args.train_on, args.test_on or "test")

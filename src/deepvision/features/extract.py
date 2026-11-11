@@ -298,7 +298,11 @@ def main(argv=None) -> None:
     else:
         result = measure_cost(args.encoders, args.batch)
         out.mkdir(parents=True, exist_ok=True)
-        pd.DataFrame(result).to_csv(out / "encoder_costs.csv", index=False)
+        costs = pd.DataFrame(result)
+        if (out / "encoder_costs.csv").exists():  # keep the rows of encoders not measured in this call
+            old = pd.read_csv(out / "encoder_costs.csv")
+            costs = pd.concat([old[~old["encoder"].isin(costs["encoder"])], costs], ignore_index=True)
+        costs.to_csv(out / "encoder_costs.csv", index=False)
     print(json.dumps(result, indent=2))
 
 
