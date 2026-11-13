@@ -125,12 +125,18 @@ def groups(rows: pd.DataFrame) -> list[tuple[str, int, np.ndarray, np.ndarray]]:
 
 
 def analyse(z: np.ndarray, rows: pd.DataFrame, n_boot: int = 2000, seed: int = 0) -> dict[str, pd.DataFrame]:
+    return analyse_curves({m: structure_function(z, normalise=m == "cos") for m in METRICS}, rows, n_boot, seed)
+
+
+def analyse_curves(curves_by_metric: dict[str, np.ndarray], rows: pd.DataFrame, n_boot: int = 2000, seed: int = 0
+                   ) -> dict[str, pd.DataFrame]:
+    """curves_by_metric: metric -> (N, 15) per-video S(k), rows aligned with them."""
     rng = np.random.default_rng(seed)
     keep = rows["n_unique"].to_numpy() == 16  # clips with repeated frames would give S(k) = 0
-    z, rows = z[keep], rows[keep].reset_index(drop=True)
+    rows = rows[keep].reset_index(drop=True)
     curves, diffs, aurocs = [], [], []
-    for metric in METRICS:
-        s = structure_function(z, normalise=metric == "cos")
+    for metric, s_all in curves_by_metric.items():
+        s = s_all[keep]
         beta = loglog_slope(s)
         for name, rate, real, fake in groups(rows):
             dt = K / rate

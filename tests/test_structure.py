@@ -47,3 +47,14 @@ def test_analyse_detects_faster_fakes():
     a = res["auroc"].query("metric == 'raw' and group == 'fake_all'").iloc[0]
     assert a["n_real"] == n - 1 and a["auroc_S1"] > 0.9
     assert set(res["curves"]["group"]) >= {"real", "fake_all", "kind=T2V", "generator=G-T"}
+
+
+def test_lowlevel_curves():
+    from deepvision.features import lowlevel as ll
+
+    x = np.zeros((16, 8, 8), np.float32)
+    x[:, 0, 0] = np.arange(16) / 16  # one pixel ramps: pix S(k) = (k/16)^2 / 64
+    c = ll.curves(x)
+    assert set(c) == {"pix", "res"} and c["pix"].shape == (15,)
+    assert np.allclose(c["pix"], (np.arange(1, 16) / 16) ** 2 / 64)
+    assert np.allclose(ll.curves(np.ones((16, 8, 8), np.float32))["res"], 0)

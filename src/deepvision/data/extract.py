@@ -124,7 +124,10 @@ def extract_one(job: dict) -> dict:
     num = int(opts["num_frames"])
     try:
         duration = float(job["duration"])
-        rate = sampling_rate(duration, num, int(opts["base_fps"]), opts.get("min_duration_for_base_fps"))
+        if opts["base_fps"] == "native":  # T0': consecutive frames at the source frame rate
+            rate = max(1, round(float(job["fps"])))
+        else:
+            rate = sampling_rate(duration, num, int(opts["base_fps"]), opts.get("min_duration_for_base_fps"))
         expected = max(1, round(duration * rate))
         s_est = window_start(expected, num, opts["window"])
         keep = range(max(0, s_est - BUFFER_MARGIN), s_est + num + BUFFER_MARGIN)
