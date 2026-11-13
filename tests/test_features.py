@@ -70,7 +70,7 @@ def test_extract_end_to_end_and_resume(tmp_path, monkeypatch):
             return {"frames": frames.float().mean(dim=(3, 4))}
 
     loaded = []
-    monkeypatch.setattr(fx, "load_encoders", lambda names, device, out: loaded.append(names) or {n: Mean() for n in names})
+    monkeypatch.setattr(fx, "load_encoders", lambda names, device, out, *a: loaded.append(names) or {n: Mean() for n in names})
     out = tmp_path / "feat"
     r = fx.extract(str(tmp_path / "data"), "train", ["m1", "m2"], out, batch_videos=3, streams=2, n_shards=2,
                    device="cpu")
@@ -83,6 +83,14 @@ def test_extract_end_to_end_and_resume(tmp_path, monkeypatch):
     assert r["shards_done"] == 1 and r["videos"] == 4
     assert fx.extract(str(tmp_path / "data"), "train", ["m1"], out, device="cpu")["shards_done"] == 0
     assert len(loaded) == 2
+    # odd frames into another store: the complement of the even ones
+    odd = fx.extract(str(tmp_path / "data"), "train", ["m1"], tmp_path / "odd", batch_videos=3, n_shards=1,
+                     device="cpu", frame_indices=fx.FRAME_SETS["odd"])
+    assert odd["shards_done"] == 1
+    feats = np.load(tmp_path / "odd/m1/train/train-00000.npy")
+    assert feats.shape == (4, 8, 3)
+    assert np.allclose(feats[0, :, 0], [10 * j for j in (1, 3, 5, 7, 8, 10, 12, 14)], atol=2)
+    assert sorted(fx.FRAME_SETS["even"] + fx.FRAME_SETS["odd"]) == list(range(16))
 
 
 def test_upload_writes_index_and_card(tmp_path, monkeypatch):

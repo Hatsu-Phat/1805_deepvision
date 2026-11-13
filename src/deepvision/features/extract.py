@@ -32,6 +32,8 @@ from ..data.config import SPLITS
 
 LOG = logging.getLogger("deepvision")
 FRAME_INDICES = [0, 2, 4, 6, 9, 11, 13, 15]
+# "odd" = the other 8 clip frames (T0, 2026-11-13): even + odd give all 16 frames of a clip
+FRAME_SETS = {"even": FRAME_INDICES, "odd": [1, 3, 5, 7, 8, 10, 12, 14]}
 INDEX_COLUMNS = ["video_id", "label", "generator", "key"]
 
 
@@ -61,7 +63,8 @@ def cgroup_mib() -> float:
 class ShardWriter:
     """Memory-mapped outputs of one shard for the encoders that still need it."""
 
-    def __init__(self, out: Path, split: str, shard: str, rows: pd.DataFrame, encoders: dict):
+    def __init__(self, out: Path, split: str, shard: str, rows: pd.DataFrame, encoders: dict,
+                 n_frames: int = len(FRAME_INDICES)):
         self.rows = rows.reset_index(drop=True)
         self.n = len(rows)
         self.filled = np.zeros(self.n, dtype=bool)
@@ -70,7 +73,7 @@ class ShardWriter:
         for name, enc in encoders.items():
             d = out / name / split
             d.mkdir(parents=True, exist_ok=True)
-            shapes = [("", (self.n, len(FRAME_INDICES), enc.dim))]
+            shapes = [("", (self.n, n_frames, enc.dim))]
             if enc.video_dim:
                 shapes.append((".video", (self.n, enc.video_dim)))
             self.files[name] = []
@@ -107,7 +110,7 @@ class ShardWriter:
             self.rows[INDEX_COLUMNS].to_csv(csv, index=False)  # written last = shard done
 
 
-def load_encoders(names: list[str], device, out: Path) -> dict:
+def load_encoders(names: list[str], device, out: Path, frame_indices: list[int] = FRAME_INDICES) -> dict:
     import torch
 
     from .encoders import build_encoder
@@ -116,7 +119,7 @@ def load_encoders(names: list[str], device, out: Path) -> dict:
     for name in names:
         enc = build_encoder(name).to(device)
         encoders[name] = enc
-        info = enc.info | {"dim": enc.dim, "video_dim": enc.video_dim}
+        info = enc.info | {"dim": enc.dim, "video_dim": enc.video_dim, "frame_indices": list(frame_indices)}
         (out / name).mkdir(parents=True, exist_ok=True)
         (out / name / "encoder_info.json").write_text(json.dumps(info, indent=2))
         gc.collect()
@@ -128,7 +131,7 @@ def load_encoders(names: list[str], device, out: Path) -> dict:
 
 def extract(root: str, split: str, names: list[str], out: Path, batch_videos: int = 32, streams: int = 2,
             n_shards: int | None = None, rclone: str = "rclone", gpu_fraction: float = 0.8,
-            device: str | None = None) -> dict:
+            device: str | None = None, frame_indices: list[int] | None = None) -> dict:
     import torch
 
     from ..data.stream import ShardStream, decode_jpeg_batch, read_index
@@ -140,6 +143,7 @@ def extract(root: str, split: str, names: list[str], out: Path, batch_videos: in
             raise RuntimeError("feature extraction needs a GPU")
     else:
         device = torch.device(device)
+    frame_indices = list(frame_indices or FRAME_INDICES)
     index = read_index(root, split, rclone)
     shards = sorted(index["shard"].unique())[:n_shards]
     todo = {s: [n for n in names if not done_path(out, n, split, s).exists()] for s in shards}
@@ -148,10 +152,11 @@ def extract(root: str, split: str, names: list[str], out: Path, batch_videos: in
     if not todo:
         return {"split": split, "shards_done": 0}
     needed = sorted({n for ns in todo.values() for n in ns}, key=names.index)
-    encoders = load_encoders(needed, device, out)
+    encoders = load_encoders(needed, device, out, frame_indices)
     by_shard = {s: g for s, g in index.groupby("shard")}
     writers: dict[str, ShardWriter] = {}
-    stream = ShardStream(root, [f"shards/{split}/{s}" for s in todo], streams=streams, decode="none", rclone=rclone)
+    stream = ShardStream(root, [f"shards/{split}/{s}" for s in todo], streams=streams, decode="none", rclone=rclone,
+                         frame_indices=frame_indices)
 
     t0, seen, finished = time.time(), 0, 0
 
@@ -166,7 +171,7 @@ def extract(root: str, split: str, names: list[str], out: Path, batch_videos: in
             shard = v["shard"]
             if shard not in writers:
                 writers[shard] = ShardWriter(out, split, shard, by_shard[shard],
-                                             {n: encoders[n] for n in todo[shard]})
+                                             {n: encoders[n] for n in todo[shard]}, len(frame_indices))
             if writers[shard].write(v["pos"], v["video_id"], outputs, i):
                 writers.pop(shard).finalize()
                 finished += 1
@@ -283,6 +288,8 @@ def main(argv=None) -> None:
     ap.add_argument("--streams", type=int, default=2)
     ap.add_argument("--upload", action="store_true", help="upload each encoder folder after extraction")
     ap.add_argument("--rclone", default="rclone")
+    ap.add_argument("--frames", choices=sorted(FRAME_SETS), default="even",
+                    help="which 8 of the 16 clip frames (use another --out/--remote for odd)")
     args = ap.parse_args(argv)
     # model weights go to our own cache directory, never to the shared ~/.cache
     os.environ.setdefault("HF_HOME", os.path.expanduser("~/deepvision_cache/hf"))
@@ -290,7 +297,8 @@ def main(argv=None) -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     out = Path(os.path.expanduser(args.out))
     if args.command == "extract":
-        result = extract(args.root, args.split, args.encoders, out, args.batch, args.streams, args.shards, args.rclone)
+        result = extract(args.root, args.split, args.encoders, out, args.batch, args.streams, args.shards, args.rclone,
+                         frame_indices=FRAME_SETS[args.frames])
         if args.upload:
             result["upload"] = upload(args.split, args.encoders, out, args.remote, args.rclone)
     elif args.command == "upload":

@@ -40,6 +40,10 @@ def test_select_frames():
     assert chosen == [0, 2, 4, 6, 9, 11, 13, 15] and n == 8
     chosen, n = select_frames(list(range(5)), 8)
     assert chosen == [0, 1, 2, 3, 4, 4, 4, 4] and n == 5
+    chosen, n = select_frames(list(range(16)), 8, [1, 3, 5, 7, 8, 10, 12, 14])
+    assert chosen == [1, 3, 5, 7, 8, 10, 12, 14] and n == 8
+    chosen, n = select_frames(list(range(6)), 8, [1, 3, 5, 7, 8, 10, 12, 14])
+    assert chosen == [1, 3, 5, 5, 5, 5, 5, 5] and n == 3
 
 
 @pytest.mark.parametrize("streams", [1, 3])
