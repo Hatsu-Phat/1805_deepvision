@@ -173,7 +173,9 @@ def test_train_one_xfit_uses_both_folds():
                          "generator": ["real"] * n + ["g"] * n})
     z = torch.randn(2 * n, 16, 8)
     z[n:, rng.integers(0, 16, n)] += 1.0
-    data = {"train": (z.half(), rows), "val": (z[:64].half(), rows.iloc[:64]), "test": (z[:64].half(), rows.iloc[:64])}
+    ev = np.r_[0:32, n:n + 32]                                          # both classes, paired names
+    part = (z[ev].half(), rows.iloc[ev].reset_index(drop=True))
+    data = {"train": (z.half(), rows), "val": part, "test": part}
     with tempfile.TemporaryDirectory() as d:
         train = DEFAULTS | {"hidden": 16, "scout_hidden": 8, "n_samples": 20, "s0_epochs": 1, "s1_epochs": 1,
                             "batch_size": 32, "warmup_steps": 1}

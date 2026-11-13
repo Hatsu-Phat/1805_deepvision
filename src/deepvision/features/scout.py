@@ -365,7 +365,7 @@ def train_one(cfg: dict, method: str, k: int, seed: int, data: dict, device) -> 
             metrics_f.write(json.dumps(rec) + "\n")
             metrics_f.flush()
             key, metric = p["select"].split("/")
-            if rec[key][metric] > best_val:
+            if best is None or rec[key][metric] > best_val:     # NaN never wins, but the first epoch is kept
                 best_val = rec[key][metric]
                 best = {"stage": stage, "epoch": epoch, "model": {n: x.detach().clone() for n, x in model.state_dict().items()}}
             log.info("%s %s ep %d loss %.4f sigma %.3f | val AUROC %.4f pbAcc %.4f | test AUROC %.4f pbAcc %.4f", rid,
