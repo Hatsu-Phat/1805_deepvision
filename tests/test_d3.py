@@ -1,9 +1,7 @@
 import numpy as np
-import pytest
+import torch
 
-torch = pytest.importorskip("torch")
-
-from deepvision.baselines.d3 import d3_scores  # noqa: E402
+from deepvision.baselines.d3 import d3_scores
 
 
 def test_d3_matches_reference_formula():
