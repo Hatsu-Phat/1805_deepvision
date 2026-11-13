@@ -15,10 +15,14 @@ Methods (--methods):
     a16_attn    16 frames, gated-attention MIL                              (MIL without selection)
     topk_inst   per-frame MLP logits, mean of the K largest                 (selection by the instance score)
     rand_attn   K random frames per step (test: K evenly spaced), attention MIL
-    scout_attn  Scout top-K, attention MIL                                  (the proposed block)
+    scout_attn  Scout top-K, attention MIL                                  (the proposed block, end to end)
+    scout_s0s1  same model, trained S0 (head on random K) -> S1 (head frozen, Scout only), pipeline v3 1.3
+Scout boundary handling (option scout_pad): zeros (first sm runs) | replicate (default since sm2).
 
     python -m deepvision.features.scout --methods u8_mean a16_attn scout_attn --k 4 8 --seeds 0 1 2
     python -m deepvision.features.scout --summary          # -> <runs_root>/sm_summary.csv + sm_delta.csv
+    # sm2 (2026-11-13): replicate padding + the S0 -> S1 schedule
+    python -m deepvision.features.scout --methods u8_mean rand_attn scout_attn scout_s0s1 --runs-root ~/deepvision_runs/sm2
 Outputs per run <runs_root>/sm_<method>_k<K>_s<seed>/: config.yaml, env.txt, train.log, metrics.jsonl, best.pt,
 predictions_{val,test}.csv (with the selected frames), final.json.
 """
@@ -46,11 +50,15 @@ from .extract import FRAME_SETS
 LOG = logging.getLogger("deepvision")
 T = 16
 UNIFORM8 = FRAME_SETS["even"]
-METHODS = ("u8_mean", "a16_mean", "a16_attn", "topk_inst", "rand_attn", "scout_attn")
-SELECTING = ("topk_inst", "rand_attn", "scout_attn")  # methods for which K matters
+METHODS = ("u8_mean", "a16_mean", "a16_attn", "topk_inst", "rand_attn", "scout_attn", "scout_s0s1")
+SELECTING = ("topk_inst", "rand_attn", "scout_attn", "scout_s0s1")
+SCOUTS = ("scout_attn", "scout_s0s1")
+ATTN = ("a16_attn", "rand_attn", "scout_attn", "scout_s0s1")  # methods for which K matters
 DEFAULTS = {"epochs": 30, "batch_size": 256, "lr": 1e-3, "weight_decay": 1e-4, "warmup_steps": 50,
             "hidden": 512, "dropout": 0.1, "scout_hidden": 64, "n_samples": 500, "sigma0": 0.1, "sigma_min": 0.01,
-            "val_frac": 0.1, "select": "val/auroc"}
+            "val_frac": 0.1, "select": "val/auroc",
+            # added 2026-11-13 (sm2): boundary handling of the Scout; zeros = the first sm runs
+            "scout_pad": "replicate", "s0_epochs": 20, "s1_epochs": 20}
 
 
 # ----------------------------------------------------------------------------------------------- selection
@@ -87,30 +95,39 @@ def indicator(idx: torch.Tensor, t: int = T) -> torch.Tensor:
     return F.one_hot(idx, t).float()
 
 
-def clip_differences(z: torch.Tensor, eps: float = 1e-6) -> tuple[torch.Tensor, torch.Tensor]:
+def clip_differences(z: torch.Tensor, eps: float = 1e-6, pad: str = "zeros") -> tuple[torch.Tensor, torch.Tensor]:
     """First / second temporal differences (zero for the first frame(s)), each divided by its mean norm over
-    the clip, so the Scout sees the shape of the motion and not its amount (which depends on the sampling rate)."""
+    the clip, so the Scout sees the shape of the motion and not its amount (which depends on the sampling rate).
+    pad="replicate" copies the first defined difference into the undefined boundary frames instead of zeros, so the
+    boundary frames carry no constant marker the Scout could use as a position code."""
     d1 = torch.zeros_like(z)
     d1[:, 1:] = z[:, 1:] - z[:, :-1]
     d2 = torch.zeros_like(z)
     d2[:, 2:] = d1[:, 2:] - d1[:, 1:-1]
     n1 = d1[:, 1:].norm(dim=-1).mean(1).clamp_min(eps)
     n2 = d2[:, 2:].norm(dim=-1).mean(1).clamp_min(eps)
+    if pad == "replicate":
+        d1[:, 0] = d1[:, 1]
+        d2[:, :2] = d2[:, 2:3]
+    elif pad != "zeros":
+        raise ValueError(f"unknown pad {pad!r}")
     return d1 / n1[:, None, None], d2 / n2[:, None, None]
 
 
 class Scout(nn.Module):
-    def __init__(self, dim: int, hidden: int = 64):
+    def __init__(self, dim: int, hidden: int = 64, pad: str = "zeros"):
         super().__init__()
+        self.pad = pad
+        mode = "replicate" if pad == "replicate" else "zeros"
         self.ln = nn.LayerNorm(dim)
         self.proj = nn.Linear(3 * dim, hidden)
         self.ctx = nn.Linear(hidden, hidden)
-        self.c1 = nn.Conv1d(hidden, hidden, 3, padding=1, dilation=1)
-        self.c2 = nn.Conv1d(hidden, hidden, 3, padding=2, dilation=2)
+        self.c1 = nn.Conv1d(hidden, hidden, 3, padding=1, dilation=1, padding_mode=mode)
+        self.c2 = nn.Conv1d(hidden, hidden, 3, padding=2, dilation=2, padding_mode=mode)
         self.out = nn.Linear(hidden, 1)
 
     def forward(self, z: torch.Tensor) -> torch.Tensor:
-        d1, d2 = clip_differences(z)
+        d1, d2 = clip_differences(z, pad=self.pad)
         h = F.gelu(self.proj(torch.cat([self.ln(z), d1, d2], -1)))
         h = h + self.ctx(h.mean(1, keepdim=True))
         h = h.transpose(1, 2)
@@ -135,7 +152,8 @@ class SMNet(nn.Module):
     None (the method's own) | "even" (K evenly spaced) | "random" (K random, seeded by the caller)."""
 
     def __init__(self, method: str, dim: int, mean: torch.Tensor, std: torch.Tensor, k: int = 8,
-                 hidden: int = 512, dropout: float = 0.1, scout_hidden: int = 64, n_samples: int = 500):
+                 hidden: int = 512, dropout: float = 0.1, scout_hidden: int = 64, n_samples: int = 500,
+                 scout_pad: str = "zeros"):
         super().__init__()
         if method not in METHODS:
             raise ValueError(f"unknown method {method!r}")
@@ -143,9 +161,9 @@ class SMNet(nn.Module):
         self.register_buffer("mean", mean.float())
         self.register_buffer("std", std.float().clamp_min(1e-6))
         self.frame = nn.Sequential(nn.Linear(dim, hidden), nn.GELU(), nn.Dropout(dropout))
-        self.attn = GatedAttention(hidden) if method.endswith("attn") else None
+        self.attn = GatedAttention(hidden) if method in ATTN else None
         self.cls = nn.Linear(hidden, 1)
-        self.scout = Scout(dim, scout_hidden) if method == "scout_attn" else None
+        self.scout = Scout(dim, scout_hidden, scout_pad) if method in SCOUTS else None
         self.sigma = 0.1
         self.selection: str | None = None
 
@@ -293,53 +311,74 @@ def train_one(cfg: dict, method: str, k: int, seed: int, data: dict, device) -> 
     mean, std = zf.mean((0, 1)), zf.std((0, 1))
     del zf
     model = SMNet(method, ztr.shape[-1], mean, std, k, p["hidden"], p["dropout"], p["scout_hidden"],
-                  p["n_samples"]).to(device)
-    opt = torch.optim.AdamW(model.parameters(), lr=p["lr"], weight_decay=p["weight_decay"])
-    steps_per_epoch = math.ceil(len(ztr) / p["batch_size"])
-    total = p["epochs"] * steps_per_epoch
-    sched = torch.optim.lr_scheduler.LambdaLR(opt, lambda s: min(1.0, (s + 1) / max(p["warmup_steps"], 1))
-                                              * 0.5 * (1 + math.cos(math.pi * min(s, total) / total)))
+                  p["n_samples"], p["scout_pad"]).to(device)
     ztr_d, ytr_d = ztr.to(device), ytr.to(device)
     rng = np.random.default_rng(seed)
-    best, best_val, prev_sel, t0, step = None, -1.0, None, time.time(), 0
+    t0 = time.time()
     metrics_f = open(run_dir / "metrics.jsonl", "w", encoding="utf-8")
-    for epoch in range(p["epochs"]):
-        model.train()
-        losses = []
-        for b in np.array_split(rng.permutation(len(ztr)), steps_per_epoch):
-            frac = step / max(total - 1, 1)
-            model.sigma = max(p["sigma_min"], p["sigma0"] * (1 - frac))
-            bi = torch.as_tensor(b, device=device)
-            loss = F.binary_cross_entropy_with_logits(model(ztr_d[bi]), ytr_d[bi])
-            opt.zero_grad(set_to_none=True)
-            loss.backward()
-            opt.step()
-            sched.step()
-            losses.append(loss.item())
-            step += 1
-        rec = {"epoch": epoch, "step": step, "loss": float(np.mean(losses)), "sigma": model.sigma}
-        for name in ("val", "test"):
-            s, sel = scores_of(model, data[name][0], device)
-            m = eval_set(data[name][1], s, paired=True)
-            rec[name] = {x: m[x] for x in ("auroc", "bacc", "vif_avg_bacc", "vif_avg_auroc")}
-            if name == "val" and method in SELECTING:
-                st = selection_stats(sel, data[name][1], prev_sel)
-                rec["val_jaccard_prev"] = st.get("jaccard_prev")
-                prev_sel = sel
-        metrics_f.write(json.dumps(rec) + "\n")
-        metrics_f.flush()
-        key, metric = p["select"].split("/")
-        v = rec[key][metric]
-        if v > best_val:
-            best_val, best = v, {"epoch": epoch, "model": {n: x.detach().clone() for n, x in model.state_dict().items()}}
-        log.info("%s ep %d loss %.4f sigma %.3f | val AUROC %.4f pbAcc %.4f | test AUROC %.4f pbAcc %.4f", rid, epoch,
-                 rec["loss"], model.sigma, rec["val"]["auroc"], rec["val"]["vif_avg_bacc"], rec["test"]["auroc"],
-                 rec["test"]["vif_avg_bacc"])
+
+    def fit(stage: str, params, epochs: int, train_sel: str | None, eval_sel: str | None) -> dict:
+        """Train `params` for `epochs`; return the best state on the validation metric (evaluated with eval_sel)."""
+        opt = torch.optim.AdamW(params, lr=p["lr"], weight_decay=p["weight_decay"])
+        steps_per_epoch = math.ceil(len(ztr) / p["batch_size"])
+        total = epochs * steps_per_epoch
+        sched = torch.optim.lr_scheduler.LambdaLR(opt, lambda s: min(1.0, (s + 1) / max(p["warmup_steps"], 1))
+                                                  * 0.5 * (1 + math.cos(math.pi * min(s, total) / total)))
+        best, best_val, prev_sel, step = None, -1.0, None, 0
+        for epoch in range(epochs):
+            model.train()
+            model.selection = train_sel
+            if stage == "s1":
+                model.frame.eval()                              # frozen head: no dropout while the Scout learns
+            losses = []
+            for b in np.array_split(rng.permutation(len(ztr)), steps_per_epoch):
+                model.sigma = max(p["sigma_min"], p["sigma0"] * (1 - step / max(total - 1, 1)))
+                bi = torch.as_tensor(b, device=device)
+                loss = F.binary_cross_entropy_with_logits(model(ztr_d[bi]), ytr_d[bi])
+                opt.zero_grad(set_to_none=True)
+                loss.backward()
+                opt.step()
+                sched.step()
+                losses.append(loss.item())
+                step += 1
+            model.selection = None
+            rec = {"stage": stage, "epoch": epoch, "step": step, "loss": float(np.mean(losses)), "sigma": model.sigma}
+            for name in ("val", "test"):
+                s, sel = scores_of(model, data[name][0], device, selection=eval_sel, seed=seed)
+                m = eval_set(data[name][1], s, paired=True)
+                rec[name] = {x: m[x] for x in ("auroc", "bacc", "vif_avg_bacc", "vif_avg_auroc")}
+                if name == "val" and method in SELECTING and eval_sel is None:
+                    st = selection_stats(sel, data[name][1], prev_sel)
+                    rec["val_jaccard_prev"] = st.get("jaccard_prev")
+                    prev_sel = sel
+            metrics_f.write(json.dumps(rec) + "\n")
+            metrics_f.flush()
+            key, metric = p["select"].split("/")
+            if rec[key][metric] > best_val:
+                best_val = rec[key][metric]
+                best = {"stage": stage, "epoch": epoch, "model": {n: x.detach().clone() for n, x in model.state_dict().items()}}
+            log.info("%s %s ep %d loss %.4f sigma %.3f | val AUROC %.4f pbAcc %.4f | test AUROC %.4f pbAcc %.4f", rid,
+                     stage, epoch, rec["loss"], model.sigma, rec["val"]["auroc"], rec["val"]["vif_avg_bacc"],
+                     rec["test"]["auroc"], rec["test"]["vif_avg_bacc"])
+        model.load_state_dict(best["model"])
+        return best
+
+    if method == "scout_s0s1":
+        # S0: the MIL head on K random frames per step (picked on val with K evenly spaced frames);
+        # S1: the head is frozen, only the Scout learns, with perturbed top-K (pipeline v3, section 1.3)
+        head = [x for n, x in model.named_parameters() if not n.startswith("scout.")]
+        s0 = fit("s0", head, p["s0_epochs"], "random", "even")
+        for x in head:
+            x.requires_grad_(False)
+        best = fit("s1", list(model.scout.parameters()), p["s1_epochs"], None, None)
+        best["s0_epoch"] = s0["epoch"]
+    else:
+        best = fit("e2e", list(model.parameters()), p["epochs"], None, None)
     metrics_f.close()
-    model.load_state_dict(best["model"])
     torch.save(best, run_dir / "best.pt")
     final = {"run_id": rid, "method": method, "k": k if method in SELECTING else 0, "seed": seed,
-             "best_epoch": best["epoch"], "select": p["select"], "train_videos": len(ztr),
+             "best_epoch": best["epoch"], "best_stage": best["stage"], "s0_epoch": best.get("s0_epoch"),
+             "select": p["select"], "train_videos": len(ztr),
              "train_seconds": round(time.time() - t0, 1),
              "params": sum(x.numel() for x in model.parameters()),
              "scout_params": sum(x.numel() for x in model.scout.parameters()) if model.scout is not None else 0}
@@ -351,7 +390,7 @@ def train_one(cfg: dict, method: str, k: int, seed: int, data: dict, device) -> 
         final[name] = eval_set(rows, s, paired=True)
         if method in SELECTING:
             final[name]["selection"] = selection_stats(sel, rows)
-    if method in ("scout_attn",):                       # same MIL head, other frame choices (mechanism check)
+    if method in SCOUTS:                                # same MIL head, other frame choices (mechanism check)
         for sel_mode in ("even", "random"):
             s, _ = scores_of(model, data["test"][0], device, selection=sel_mode, seed=seed)
             df = data["test"][1][["video_id", "generator", "label"]].assign(score=s)

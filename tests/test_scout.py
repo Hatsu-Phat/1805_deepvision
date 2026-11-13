@@ -35,13 +35,17 @@ def test_clip_differences_scale_invariant():
     b1, b2 = clip_differences(3.0 * z + 1.0)
     assert torch.allclose(a1, b1, atol=1e-5) and torch.allclose(a2, b2, atol=1e-5)
     assert torch.all(a1[:, 0] == 0) and torch.all(a2[:, :2] == 0)
+    r1, r2 = clip_differences(z, pad="replicate")
+    assert torch.equal(r1[:, 0], r1[:, 1]) and torch.equal(r2[:, 0], r2[:, 2]) and torch.equal(r2[:, 1], r2[:, 2])
+    assert torch.allclose(r1[:, 1:], a1[:, 1:]) and torch.allclose(r2[:, 2:], a2[:, 2:])
 
 
 def test_every_method_runs():
     torch.manual_seed(0)
     z = torch.randn(5, 16, 12).half()
     for m in METHODS:
-        net = SMNet(m, 12, torch.zeros(12), torch.ones(12), k=4, hidden=16, scout_hidden=8, n_samples=20)
+        net = SMNet(m, 12, torch.zeros(12), torch.ones(12), k=4, hidden=16, scout_hidden=8, n_samples=20,
+                    scout_pad="replicate")
         net.train()
         out = net(z)
         assert out.shape == (5,)
@@ -51,10 +55,10 @@ def test_every_method_runs():
         assert logit.shape == (5,)
         if m in ("u8_mean",):
             assert w.shape == (5, 8, 16)
-        if m in ("topk_inst", "rand_attn", "scout_attn"):
+        if m in ("topk_inst", "rand_attn", "scout_attn", "scout_s0s1"):
             assert w.shape == (5, 4, 16) and torch.all(w.sum(1).max(-1).values <= 1)
         for sel in ("even", "random"):
-            if m == "scout_attn":
+            if m in ("scout_attn", "scout_s0s1"):
                 net.selection = sel
                 assert net(z).shape == (5,)
                 net.selection = None
@@ -116,3 +120,32 @@ def test_scout_finds_planted_frames():
     hit = (w.sum(1).bool() & planted)[fake].sum(1).float().mean().item()   # planted frames picked (of 2)
     assert acc > 0.95, acc
     assert hit > 1.5, hit
+
+
+def test_train_one_s0s1_freezes_head():
+    import json
+    import tempfile
+    from pathlib import Path
+
+    from deepvision.features.scout import DEFAULTS, train_one
+
+    rng = np.random.default_rng(0)
+    def part(n):
+        names = [f"n{i}" for i in range(n)]
+        rows = pd.DataFrame({"video_id": names * 2, "label": [0] * n + [1] * n,
+                             "generator": ["real"] * n + ["g"] * n})
+        z = torch.randn(2 * n, 16, 8)
+        z[n:, rng.integers(0, 16, n)] += 1.0
+        return z.half(), rows
+    data = {"train": part(64), "val": part(16), "test": part(16)}
+    with tempfile.TemporaryDirectory() as d:
+        train = DEFAULTS | {"hidden": 16, "scout_hidden": 8, "n_samples": 20, "s0_epochs": 2, "s1_epochs": 2,
+                            "batch_size": 32, "warmup_steps": 1}
+        cfg = {"encoder": "test", "runs_root": d, "train": train}
+        final = train_one(cfg, "scout_s0s1", 4, 0, data, torch.device("cpu"))
+        recs = [json.loads(x) for x in (Path(d) / "sm_scout_s0s1_k4_s0" / "metrics.jsonl").read_text().splitlines()]
+        assert [r["stage"] for r in recs] == ["s0", "s0", "s1", "s1"]
+        assert final["best_stage"] == "s1" and final["s0_epoch"] in (0, 1)
+        assert "test_even" in final and "test_random" in final
+        best = torch.load(Path(d) / "sm_scout_s0s1_k4_s0" / "best.pt", weights_only=False)
+        assert best["stage"] == "s1"
