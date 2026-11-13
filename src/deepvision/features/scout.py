@@ -17,6 +17,8 @@ Methods (--methods):
     rand_attn   K random frames per step (test: K evenly spaced), attention MIL
     scout_attn  Scout top-K, attention MIL                                  (the proposed block, end to end)
     scout_s0s1  same model, trained S0 (head on random K) -> S1 (head frozen, Scout only), pipeline v3 1.3
+    scout_xfit  S0 -> S1 with cross-fitting: S0 on one half of the train names, S1 on the other half, so the Scout
+                learns from videos the frozen head has never seen
 Scout boundary handling (option scout_pad): zeros (first sm runs) | replicate (default since sm2).
 
     python -m deepvision.features.scout --methods u8_mean a16_attn scout_attn --k 4 8 --seeds 0 1 2
@@ -50,15 +52,17 @@ from .extract import FRAME_SETS
 LOG = logging.getLogger("deepvision")
 T = 16
 UNIFORM8 = FRAME_SETS["even"]
-METHODS = ("u8_mean", "a16_mean", "a16_attn", "topk_inst", "rand_attn", "scout_attn", "scout_s0s1")
-SELECTING = ("topk_inst", "rand_attn", "scout_attn", "scout_s0s1")
-SCOUTS = ("scout_attn", "scout_s0s1")
-ATTN = ("a16_attn", "rand_attn", "scout_attn", "scout_s0s1")  # methods for which K matters
+METHODS = ("u8_mean", "a16_mean", "a16_attn", "topk_inst", "rand_attn", "scout_attn", "scout_s0s1", "scout_xfit")
+SELECTING = ("topk_inst", "rand_attn", "scout_attn", "scout_s0s1", "scout_xfit")
+SCOUTS = ("scout_attn", "scout_s0s1", "scout_xfit")
+ATTN = ("a16_attn", "rand_attn", "scout_attn", "scout_s0s1", "scout_xfit")  # methods for which K matters
 DEFAULTS = {"epochs": 30, "batch_size": 256, "lr": 1e-3, "weight_decay": 1e-4, "warmup_steps": 50,
             "hidden": 512, "dropout": 0.1, "scout_hidden": 64, "n_samples": 500, "sigma0": 0.1, "sigma_min": 0.01,
             "val_frac": 0.1, "select": "val/auroc",
             # added 2026-11-13 (sm2): boundary handling of the Scout; zeros = the first sm runs
-            "scout_pad": "replicate", "s0_epochs": 20, "s1_epochs": 20}
+            "scout_pad": "replicate", "s0_epochs": 20, "s1_epochs": 20,
+            # added 2026-11-13 (sm3): scout_xfit trains the head on train names with hash < xfit_split, the Scout on the rest
+            "xfit_split": 0.55}
 
 
 # ----------------------------------------------------------------------------------------------- selection
@@ -212,6 +216,11 @@ def split_val(rows: pd.DataFrame, frac: float) -> np.ndarray:
     return np.array([name_bucket(v) < frac for v in rows["video_id"]])
 
 
+def xfit_folds(rows: pd.DataFrame, split: float) -> np.ndarray:
+    """True for the train videos of the S1 (Scout) fold: name hash >= split. Names stay whole, like split_val."""
+    return np.array([name_bucket(v) >= split for v in rows["video_id"]])
+
+
 def load_vif(even: Path, odd: Path, encoder: str, root: str, rclone: str = "rclone") -> dict:
     from ..data.stream import read_index
     from .structure import load_split
@@ -317,10 +326,12 @@ def train_one(cfg: dict, method: str, k: int, seed: int, data: dict, device) -> 
     t0 = time.time()
     metrics_f = open(run_dir / "metrics.jsonl", "w", encoding="utf-8")
 
-    def fit(stage: str, params, epochs: int, train_sel: str | None, eval_sel: str | None) -> dict:
+    def fit(stage: str, params, epochs: int, train_sel: str | None, eval_sel: str | None,
+            idx: np.ndarray | None = None) -> dict:
         """Train `params` for `epochs`; return the best state on the validation metric (evaluated with eval_sel)."""
         opt = torch.optim.AdamW(params, lr=p["lr"], weight_decay=p["weight_decay"])
-        steps_per_epoch = math.ceil(len(ztr) / p["batch_size"])
+        idx = np.arange(len(ztr)) if idx is None else idx
+        steps_per_epoch = math.ceil(len(idx) / p["batch_size"])
         total = epochs * steps_per_epoch
         sched = torch.optim.lr_scheduler.LambdaLR(opt, lambda s: min(1.0, (s + 1) / max(p["warmup_steps"], 1))
                                                   * 0.5 * (1 + math.cos(math.pi * min(s, total) / total)))
@@ -331,7 +342,7 @@ def train_one(cfg: dict, method: str, k: int, seed: int, data: dict, device) -> 
             if stage == "s1":
                 model.frame.eval()                              # frozen head: no dropout while the Scout learns
             losses = []
-            for b in np.array_split(rng.permutation(len(ztr)), steps_per_epoch):
+            for b in np.array_split(rng.permutation(idx), steps_per_epoch):
                 model.sigma = max(p["sigma_min"], p["sigma0"] * (1 - step / max(total - 1, 1)))
                 bi = torch.as_tensor(b, device=device)
                 loss = F.binary_cross_entropy_with_logits(model(ztr_d[bi]), ytr_d[bi])
@@ -363,14 +374,21 @@ def train_one(cfg: dict, method: str, k: int, seed: int, data: dict, device) -> 
         model.load_state_dict(best["model"])
         return best
 
-    if method == "scout_s0s1":
+    folds = {}
+    if method in ("scout_s0s1", "scout_xfit"):
         # S0: the MIL head on K random frames per step (picked on val with K evenly spaced frames);
         # S1: the head is frozen, only the Scout learns, with perturbed top-K (pipeline v3, section 1.3)
+        i0 = i1 = None
+        if method == "scout_xfit":
+            b = xfit_folds(data["train"][1], p["xfit_split"])
+            i0, i1 = np.where(~b)[0], np.where(b)[0]
+            folds = {"s0_videos": int(len(i0)), "s1_videos": int(len(i1))}
+            log.info("%s: cross-fitting, S0 on %d videos, S1 on %d", rid, len(i0), len(i1))
         head = [x for n, x in model.named_parameters() if not n.startswith("scout.")]
-        s0 = fit("s0", head, p["s0_epochs"], "random", "even")
+        s0 = fit("s0", head, p["s0_epochs"], "random", "even", i0)
         for x in head:
             x.requires_grad_(False)
-        best = fit("s1", list(model.scout.parameters()), p["s1_epochs"], None, None)
+        best = fit("s1", list(model.scout.parameters()), p["s1_epochs"], None, None, i1)
         best["s0_epoch"] = s0["epoch"]
     else:
         best = fit("e2e", list(model.parameters()), p["epochs"], None, None)
@@ -378,7 +396,7 @@ def train_one(cfg: dict, method: str, k: int, seed: int, data: dict, device) -> 
     torch.save(best, run_dir / "best.pt")
     final = {"run_id": rid, "method": method, "k": k if method in SELECTING else 0, "seed": seed,
              "best_epoch": best["epoch"], "best_stage": best["stage"], "s0_epoch": best.get("s0_epoch"),
-             "select": p["select"], "train_videos": len(ztr),
+             "select": p["select"], "train_videos": len(ztr), **folds,
              "train_seconds": round(time.time() - t0, 1),
              "params": sum(x.numel() for x in model.parameters()),
              "scout_params": sum(x.numel() for x in model.scout.parameters()) if model.scout is not None else 0}
