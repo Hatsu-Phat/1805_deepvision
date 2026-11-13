@@ -41,17 +41,28 @@ def clip_path_for(clips_dir: Path, row: dict) -> Path:
     return clips_dir / row["split"] / LABEL_NAMES[int(row["label"])] / row["generator"] / f"{row['video_id']}.tar"
 
 
-def crop_for(opts: dict, split: str, generator: str, label: int) -> float:
+def crop_for(opts: dict, split: str, generator: str, label: int) -> float | str:
     if opts["crop"] == "demamba":
         return demamba_crop_percentage(split, generator, label)
+    if opts["crop"] == "square":  # 2026-11-14: centered square crop, so the aspect ratio cannot leak
+        return "square"
     return float(opts["crop"] or 0.0)
 
 
-def shrink_jpeg(data: bytes, crop: float, size: int, quality: int) -> bytes:
+def crop_center_square(img: np.ndarray) -> np.ndarray:
+    h, w = img.shape[:2]
+    s = min(h, w)
+    y, x = (h - s) // 2, (w - s) // 2
+    return img[y:y + s, x:x + s]
+
+
+def shrink_jpeg(data: bytes, crop: float | str, size: int, quality: int) -> bytes:
     img = cv2.imdecode(np.frombuffer(data, np.uint8), cv2.IMREAD_COLOR)
     if img is None:
         raise RuntimeError("cannot decode frame")
-    if crop:
+    if crop == "square":
+        img = crop_center_square(img)
+    elif crop:
         img = crop_center_by_percentage(img, crop)
     img = cv2.resize(img, (size, size), interpolation=cv2.INTER_LINEAR)
     ok, buf = cv2.imencode(".jpg", img, [cv2.IMWRITE_JPEG_QUALITY, quality])
