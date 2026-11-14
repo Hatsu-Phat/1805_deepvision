@@ -86,7 +86,7 @@ def find_duplicates(cfg: DataConfig, st: pd.DataFrame, log) -> pd.DataFrame:
         return st
     cand["md5"] = [_md5(cfg.raw_root / p) for p in cand["path"]]
     # keep test before train before train2 so that the later copy is the one dropped
-    rank = {"test": 0, "vif_test": 0, "train": 1, "train2": 2, "vif_train": 3}
+    rank = {"test": 0, "vif_test": 0, "aigvd_test": 0, "train": 1, "train2": 2, "vif_train": 3}
     cand = cand.sort_values(["md5", "split", "path"], key=lambda s: s.map(rank) if s.name == "split" else s)
     dup = cand[cand.duplicated("md5", keep="first")]
     first = cand.drop_duplicates("md5", keep="first").set_index("md5")["path"]

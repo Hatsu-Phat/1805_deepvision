@@ -14,9 +14,11 @@ LABEL_NAMES = {0: "real", 1: "fake"}
 TRAIN_SPLITS = ("train", "train2")
 # vif_train / vif_test: ViF-CoT-4K and ViF-Bench (Skyra, arXiv:2512.15693), added 2026-11-09 for cross-dataset
 # tests. They live in their own out_root (configs/vif.yaml) and are never pooled with the GenVideo splits.
-SPLITS = ("train", "test", "train2", "vif_train", "vif_test")
+# aigvd_test: AIGVDBench test split (CVPR 2026, arXiv:2601.11035; HF AIGVDBench/AIGVDBench, CC-BY-4.0), added
+# 2026-11-14 for the processing audit and cross-dataset tests (configs/aigvd_*.yaml). Evaluation only.
+SPLITS = ("train", "test", "train2", "vif_train", "vif_test", "aigvd_test")
 # benchmark splits: files are kept even when they would be excluded (too short, duplicates) from training
-EVAL_SPLITS = ("test", "vif_test")
+EVAL_SPLITS = ("test", "vif_test", "aigvd_test")
 
 
 @dataclass(frozen=True)

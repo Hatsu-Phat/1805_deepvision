@@ -44,7 +44,8 @@ def d3_scores(feats):
 
 
 def run(root: str, split: str, out: Path, batch_videos: int = 8, num_frames: int = 16, streams: int = 2,
-        rclone: str = "rclone", gpu_fraction: float = 0.8, limit: int | None = None) -> dict:
+        rclone: str = "rclone", gpu_fraction: float = 0.8, limit: int | None = None,
+        save_features: bool = True) -> dict:
     import torch
     from transformers import XCLIPVisionModel
 
@@ -72,7 +73,8 @@ def run(root: str, split: str, out: Path, batch_videos: int = 8, num_frames: int
             r = {k: v[k] for k in ("key", "video_id", "label", "generator", "shard", "pos")}
             r |= {k: float(val[i]) for k, val in s.items()}
             rows.append(r)
-        feats_all.append(f.half().cpu().numpy())
+        if save_features:  # (N, T, 512) fp16; off for large splits (server RAM limit 4 GiB)
+            feats_all.append(f.half().cpu().numpy())
 
     for v in stream:
         batch.append(v)
@@ -87,7 +89,8 @@ def run(root: str, split: str, out: Path, batch_videos: int = 8, num_frames: int
     df = pd.DataFrame(rows)
     df["fake_score"] = -df["std_l2"]
     df.to_csv(out / "scores.csv", index=False)
-    np.save(out / "features_xclip_b16.npy", np.concatenate(feats_all))
+    if save_features:
+        np.save(out / "features_xclip_b16.npy", np.concatenate(feats_all))
     from sklearn.metrics import roc_auc_score
 
     res = {"root": root, "split": split, "videos": len(df), "seconds": round(time.time() - t0, 1),
@@ -108,10 +111,11 @@ def main(argv=None) -> None:
     ap.add_argument("--frames", type=int, default=16)
     ap.add_argument("--limit", type=int, default=None, help="first N shards (smoke test)")
     ap.add_argument("--rclone", default="rclone")
+    ap.add_argument("--no-features", action="store_true", help="do not keep/save the frame features")
     args = ap.parse_args(argv)
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     run(args.root, args.split, Path(args.out).expanduser(), args.batch, args.frames, rclone=args.rclone,
-        limit=args.limit)
+        limit=args.limit, save_features=not args.no_features)
 
 
 if __name__ == "__main__":
