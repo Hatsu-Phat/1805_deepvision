@@ -45,6 +45,24 @@ def test_classify():
     assert st.loc["f.mp4", "status"] == "broken"
 
 
+def test_classify_c2_filters_eval_splits():
+    inv = pd.DataFrame([
+        inv_row("a.mp4", split="aigvd_test"),
+        inv_row("lowfps.mp4", split="aigvd_test", fps=3.0),
+        inv_row("short.mp4", split="aigvd_test", duration=1.5),
+        inv_row("small.mp4", split="aigvd_test", width=192, height=192),
+        inv_row("train_lowfps.mp4", fps=6.0),
+    ])
+    old = classify(inv, min_duration=2.0, min_side=224, min_fps=8).set_index("path")
+    assert (old.loc[["lowfps.mp4", "short.mp4", "small.mp4"], "status"] == "ok").all()  # eval: note only
+    assert old.loc["lowfps.mp4", "note"] == "fps < 8"
+    assert old.loc["train_lowfps.mp4", "status"] == "excluded"
+    c2 = classify(inv, min_duration=2.0, min_side=224, min_fps=8, filter_eval=True).set_index("path")
+    assert c2.loc["a.mp4", "status"] == "ok"
+    assert (c2.loc[["lowfps.mp4", "short.mp4", "small.mp4", "train_lowfps.mp4"], "status"] == "excluded").all()
+    assert c2.loc["small.mp4", "reason"] == "min side < 224px"
+
+
 def make_cfg(tmp_path):
     return DataConfig(raw_root=tmp_path / "raw", out_root=tmp_path / "out", quarantine_root=tmp_path / "q",
                       sources=[Source("s", "s", "train", 1, "G")])

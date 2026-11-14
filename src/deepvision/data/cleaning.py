@@ -49,10 +49,14 @@ def _quick_hash(path: Path, chunk: int = 1 << 16) -> str:
     return h.hexdigest()
 
 
-def classify(inv: pd.DataFrame, min_duration: float, min_side: int) -> pd.DataFrame:
+def classify(inv: pd.DataFrame, min_duration: float, min_side: int, min_fps: float = 0.0,
+             filter_eval: bool = False) -> pd.DataFrame:
+    """Status per video. Exclusions only add a note on eval splits, unless filter_eval (C2 protocol,
+    2026-11-14: the same fps / duration / frame-size floor on every split, so no split keeps videos the
+    common clip grid cannot represent)."""
     st = inv[["path", "source", "split", "label", "generator", "size_bytes"]].copy()
     st["status"], st["reason"], st["note"] = "ok", "", ""
-    is_test = st["split"].isin(EVAL_SPLITS)
+    is_test = st["split"].isin(EVAL_SPLITS) & (not filter_eval)
 
     def mark(mask, status, reason):
         sel = mask & (st["status"] == "ok")
@@ -70,6 +74,8 @@ def classify(inv: pd.DataFrame, min_duration: float, min_side: int) -> pd.DataFr
     mark(inv["duration"].fillna(0) <= 0, "broken", "no duration")
     mark(inv["duration"] < min_duration, "excluded", f"duration < {min_duration}s")
     mark(inv[["width", "height"]].min(axis=1) < min_side, "excluded", f"min side < {min_side}px")
+    if min_fps:
+        mark(inv["fps"].fillna(0) < min_fps, "excluded", f"fps < {min_fps}")
     return st
 
 
@@ -119,7 +125,8 @@ def add_extract_errors(cfg: DataConfig, st: pd.DataFrame, log) -> pd.DataFrame:
 def cmd_check(cfg: DataConfig, args, log) -> None:
     inv = pd.read_csv(cfg.inventory_dir / "inventory.csv")
     v = cfg.validation
-    st = classify(inv, float(v.get("min_duration", 0.5)), int(v.get("min_side", 64)))
+    st = classify(inv, float(v.get("min_duration", 0.5)), int(v.get("min_side", 64)),
+                  float(v.get("min_fps", 0.0)), bool(v.get("filter_eval", False)))
     if not args.skip_duplicates:
         st = find_duplicates(cfg, st, log)
     if args.with_extract_errors:
