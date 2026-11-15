@@ -17,9 +17,10 @@ TRAIN_SPLITS = ("train", "train2")
 # aigvd_test: AIGVDBench test split (CVPR 2026, arXiv:2601.11035; HF AIGVDBench/AIGVDBench, CC-BY-4.0), added
 # 2026-11-14 for the processing audit and cross-dataset tests (configs/aigvd_*.yaml). Evaluation only.
 # aigvd_int: AIGVDBench reals re-encoded / downscaled (configs/aigvd_int_*.yaml), the processing intervention set.
-SPLITS = ("train", "test", "train2", "vif_train", "vif_test", "aigvd_test", "aigvd_int")
+# genvideo_int: GenVideo train2 Youku reals with only fps / clip length changed (configs/genvideo_int.yaml, 2026-11-15).
+SPLITS = ("train", "test", "train2", "vif_train", "vif_test", "aigvd_test", "aigvd_int", "genvideo_int")
 # benchmark splits: files are kept even when they would be excluded (too short, duplicates) from training
-EVAL_SPLITS = ("test", "vif_test", "aigvd_test", "aigvd_int")
+EVAL_SPLITS = ("test", "vif_test", "aigvd_test", "aigvd_int", "genvideo_int")
 
 
 @dataclass(frozen=True)
