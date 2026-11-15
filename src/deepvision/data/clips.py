@@ -34,7 +34,7 @@ from .transforms import crop_center_by_percentage, demamba_crop_percentage
 
 
 def clip_options(cfg: DataConfig) -> dict:
-    return {"size": 224, "crop": "demamba", "jpeg_quality": 95, "keep_native": ["test"]} | cfg.clips
+    return {"size": 224, "crop": "demamba", "jpeg_quality": 95, "keep_native": ["test"], "bottleneck": 0} | cfg.clips
 
 
 def clip_path_for(clips_dir: Path, row: dict) -> Path:
@@ -56,7 +56,10 @@ def crop_center_square(img: np.ndarray) -> np.ndarray:
     return img[y:y + s, x:x + s]
 
 
-def shrink_jpeg(data: bytes, crop: float | str, size: int, quality: int) -> bytes:
+def shrink_jpeg(data: bytes, crop: float | str, size: int, quality: int, bottleneck: int = 0) -> bytes:
+    """Decode -> crop -> resize to size x size -> JPEG. With bottleneck = B (C2 v2, 2026-11-15) the frame then goes
+    down to B x B (INTER_AREA) and back up to size x size (INTER_LINEAR), so every source keeps at most the detail
+    of a B-pixel image whatever its native resolution."""
     img = cv2.imdecode(np.frombuffer(data, np.uint8), cv2.IMREAD_COLOR)
     if img is None:
         raise RuntimeError("cannot decode frame")
@@ -65,6 +68,9 @@ def shrink_jpeg(data: bytes, crop: float | str, size: int, quality: int) -> byte
     elif crop:
         img = crop_center_by_percentage(img, crop)
     img = cv2.resize(img, (size, size), interpolation=cv2.INTER_LINEAR)
+    if bottleneck and bottleneck < size:
+        img = cv2.resize(img, (bottleneck, bottleneck), interpolation=cv2.INTER_AREA)
+        img = cv2.resize(img, (size, size), interpolation=cv2.INTER_LINEAR)
     ok, buf = cv2.imencode(".jpg", img, [cv2.IMWRITE_JPEG_QUALITY, quality])
     if not ok:
         raise RuntimeError("jpeg encode failed")
@@ -101,9 +107,11 @@ def build_clip(frames: list[bytes], meta: dict, opts: dict, path: Path, clips_ro
     """Shrink native JPEG frames and store them as one clip; returns the clip meta."""
     crop = crop_for(opts, meta["split"], meta["generator"], int(meta["label"]))
     size, quality = int(opts["size"]), int(opts["jpeg_quality"])
-    small = [shrink_jpeg(b, crop, size, quality) for b in frames]
+    bottleneck = int(opts.get("bottleneck") or 0)
+    small = [shrink_jpeg(b, crop, size, quality, bottleneck) for b in frames]
     meta = meta | {"native_height": meta["height"], "native_width": meta["width"], "native_bytes": meta["bytes"],
                    "height": size, "width": size, "crop": crop, "clip_quality": quality,
+                   "bottleneck": bottleneck,
                    "clip_path": path.relative_to(clips_root).as_posix(), "bytes": sum(map(len, small))}
     meta["clip_bytes"] = write_clip(path, small, meta)
     got, _ = read_clip(path)
