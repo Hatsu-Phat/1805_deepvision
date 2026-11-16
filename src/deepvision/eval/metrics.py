@@ -1,10 +1,14 @@
 """Binary detection metrics (label 1 = fake, score = probability of fake).
 
     auroc                 main metric (rank based, equal to sklearn.metrics.roc_auc_score)
+    average_precision     AP of the fake class (sklearn.metrics.average_precision_score)
     binary_metrics        acc / bAcc / F1 / TNR / recall / precision at a threshold (Protocol A: 0.5)
     threshold_at_tnr      threshold that keeps `tnr` of the reals below it (fit on val reals)
     bootstrap_auroc_ci    stratified bootstrap CI
     per_generator         AUROC of each fake generator against all reals of the set, recall, CI
+    demamba_protocol      GenVideo protocol of DeMamba: per-generator R / P / F1 / AP, then the mean over generators
+    vif_paired_protocol   ViF-Bench protocol of Skyra: each fake paired with the real of the same name, per-generator
+                          balanced acc / recall / F1, then the mean over generators
     evaluate              everything above for one prediction table
 """
 from __future__ import annotations
@@ -14,6 +18,7 @@ import math
 import numpy as np
 import pandas as pd
 from scipy.stats import rankdata
+from sklearn.metrics import average_precision_score
 
 
 def _arrays(y, s) -> tuple[np.ndarray, np.ndarray]:
@@ -35,6 +40,13 @@ def auroc(y, s) -> float:
     return float((ranks[y == 1].sum() - n_pos * (n_pos + 1) / 2) / (n_pos * n_neg))
 
 
+def average_precision(y, s) -> float:
+    y, s = _arrays(y, s)
+    if y.sum() == 0 or y.sum() == len(y):
+        return float("nan")
+    return float(average_precision_score(y, s))
+
+
 def binary_metrics(y, s, threshold: float = 0.5) -> dict:
     y, s = _arrays(y, s)
     pred = s >= threshold
@@ -46,7 +58,7 @@ def binary_metrics(y, s, threshold: float = 0.5) -> dict:
     precision = tp / (tp + fp) if tp + fp else float("nan")
     f1 = 2 * tp / (2 * tp + fp + fn) if tp + fp + fn else float("nan")
     return {"n": len(y), "n_fake": int(pos.sum()), "n_real": int(neg.sum()), "threshold": float(threshold),
-            "auroc": auroc(y, s), "acc": (tp + tn) / len(y) if len(y) else float("nan"),
+            "auroc": auroc(y, s), "ap": average_precision(y, s), "acc": (tp + tn) / len(y) if len(y) else float("nan"),
             "bacc": (recall + tnr) / 2,
             "f1": f1, "tnr": tnr, "recall": recall, "precision": precision}
 
@@ -83,7 +95,7 @@ def per_generator(df: pd.DataFrame, threshold: float = 0.5, n_boot: int = 1000, 
     rows = []
     for gen, part in df.groupby("generator", sort=True):
         if (part["label"] == 0).all():
-            rows.append({"generator": gen, "label": 0, "n": len(part), "auroc": float("nan"),
+            rows.append({"generator": gen, "label": 0, "n": len(part), "auroc": float("nan"), "ap": float("nan"),
                          "ci_low": float("nan"), "ci_high": float("nan"), "recall": float("nan"),
                          "tnr": float((part["score"] < threshold).mean())})
             continue
@@ -91,14 +103,74 @@ def per_generator(df: pd.DataFrame, threshold: float = 0.5, n_boot: int = 1000, 
         y = np.r_[np.ones(len(fakes)), np.zeros(len(reals))]
         s = np.r_[fakes["score"].to_numpy(), reals["score"].to_numpy()]
         lo, hi = bootstrap_auroc_ci(y, s, n_boot, seed=seed)
-        rows.append({"generator": gen, "label": 1, "n": len(fakes), "auroc": auroc(y, s), "ci_low": lo,
+        rows.append({"generator": gen, "label": 1, "n": len(fakes), "auroc": auroc(y, s),
+                     "ap": average_precision(y, s), "ci_low": lo,
                      "ci_high": hi, "recall": float((fakes["score"] >= threshold).mean()), "tnr": float("nan")})
     return pd.DataFrame(rows)
 
 
+def demamba_protocol(df: pd.DataFrame, threshold: float = 0.5, n_real_ref: int = 10000) -> dict:
+    """GenVideo evaluation of DeMamba (github.com/chenhaoxing/DeMamba, util.py train_one_epoch, commit 646db28).
+
+    A video is called fake when score > threshold (strict, as upstream). The false positives are shared by every
+    generator: FP = int((1 - real accuracy over ALL reals) * n_real_ref). For each fake generator g with N_g videos:
+    TP = int(recall_g * N_g), FN = int((1 - recall_g) * N_g), P = TP / (TP + FP), R = TP / (TP + FN), F1 = 2PR/(P+R),
+    AP_g (and AUC_g, not in upstream) on [all reals + fakes of g]. The paper reports the mean over generators.
+    Upstream hard-codes N_g; here N_g is the count in df.
+    """
+    reals = df[df["label"] == 0]
+    real_acc = float((reals["score"] <= threshold).mean())
+    fp = int((1.0 - real_acc) * n_real_ref)
+    rows = []
+    for gen, fakes in df[df["label"] == 1].groupby("generator", sort=True):
+        n = len(fakes)
+        rec = float((fakes["score"] > threshold).mean())
+        tp, fn = int(rec * n), int((1.0 - rec) * n)
+        p = tp / (tp + fp) if tp + fp else 0.0
+        r = tp / (tp + fn) if tp + fn else 0.0
+        f1 = 2 * p * r / (p + r) if p + r else 0.0
+        y = np.r_[np.ones(n), np.zeros(len(reals))]
+        s = np.r_[fakes["score"].to_numpy(), reals["score"].to_numpy()]
+        rows.append({"generator": gen, "n": n, "tp": tp, "fn": fn, "recall": r, "precision": p, "f1": f1,
+                     "ap": average_precision(y, s), "auroc": auroc(y, s)})
+    out = {"threshold": float(threshold), "n_real": len(reals), "real_acc": real_acc, "fp": fp, "per_generator": rows}
+    for k in ("recall", "precision", "f1", "ap", "auroc"):
+        out[f"avg_{k}"] = float(np.mean([r[k] for r in rows])) if rows else float("nan")
+    return out
+
+
+def vif_paired_protocol(df: pd.DataFrame, threshold: float = 0.5) -> dict:
+    """ViF-Bench evaluation of Skyra (github.com/JoeLeelyf/Skyra, eval/inference_end2end/eval_vifbench.py, read
+    2026-11-09). Every fake of generator g whose video_id (file name) is also the video_id of a real forms one pair;
+    the same real is reused for every generator. Per generator, with label 1 = fake and fake when score > threshold:
+    balanced accuracy, recall and F1 (sklearn, pos_label=1) over the 2 * n_pairs predictions; the reported number is
+    the unweighted mean over generators with at least one pair. AP / AUROC on the same pairs are extras (not upstream).
+    """
+    reals = df[df["label"] == 0].drop_duplicates("video_id", keep="last").set_index("video_id")["score"]
+    rows = []
+    for gen, fakes in df[df["label"] == 1].groupby("generator", sort=True):
+        fakes = fakes[fakes["video_id"].isin(reals.index)]
+        n = len(fakes)
+        if not n:
+            continue
+        y = np.r_[np.zeros(n), np.ones(n)].astype(np.int64)
+        s = np.r_[reals.loc[fakes["video_id"]].to_numpy(), fakes["score"].to_numpy()]
+        tp, fp = int(((s > threshold) & (y == 1)).sum()), int(((s > threshold) & (y == 0)).sum())
+        rec = tp / n
+        prec = tp / (tp + fp) if tp + fp else 0.0
+        rows.append({"generator": gen, "n_pairs": n, "bacc": 0.5 * (rec + float((s[:n] <= threshold).mean())),
+                     "recall": rec, "f1": 2 * prec * rec / (prec + rec) if prec + rec else 0.0,
+                     "real_acc": float((s[:n] <= threshold).mean()), "ap": average_precision(y, s), "auroc": auroc(y, s)})
+    out = {"threshold": float(threshold), "n_real": int(len(reals)), "per_generator": rows}
+    for k in ("bacc", "recall", "f1", "real_acc", "ap", "auroc"):
+        out[f"avg_{k}"] = float(np.mean([r[k] for r in rows])) if rows else float("nan")
+    return out
+
+
 def evaluate(df: pd.DataFrame, threshold: float = 0.5, tnr_threshold: float | None = None,
-             n_boot: int = 1000, seed: int = 0) -> dict:
-    """df: label, score[, generator]. tnr_threshold: e.g. threshold_at_tnr(val reals) for the TNR-95 protocol."""
+             n_boot: int = 1000, seed: int = 0, paired: bool = False) -> dict:
+    """df: label, score[, generator]. tnr_threshold: e.g. threshold_at_tnr(val reals) for the TNR-95 protocol.
+    paired: also run vif_paired_protocol (needs video_id; for ViF-Bench, where fakes share the names of reals)."""
     y, s = df["label"].to_numpy(), df["score"].to_numpy()
     out = binary_metrics(y, s, threshold)
     out["auroc_ci"] = list(bootstrap_auroc_ci(y, s, n_boot, seed=seed))
@@ -106,4 +178,8 @@ def evaluate(df: pd.DataFrame, threshold: float = 0.5, tnr_threshold: float | No
         out["at_tnr"] = binary_metrics(y, s, tnr_threshold)
     if "generator" in df:
         out["per_generator"] = per_generator(df, threshold, n_boot, seed).to_dict("records")
+        if (df["label"] == 0).any() and (df["label"] == 1).any():
+            out["demamba"] = demamba_protocol(df, threshold)
+            if paired:
+                out["vif_paired"] = vif_paired_protocol(df, threshold)
     return out

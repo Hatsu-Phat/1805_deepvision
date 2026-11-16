@@ -18,6 +18,7 @@ import io
 import json
 import os
 import shutil
+import subprocess
 import tarfile
 import time
 from concurrent.futures import ProcessPoolExecutor, as_completed
@@ -28,36 +29,88 @@ import numpy as np
 import pandas as pd
 from tqdm import tqdm
 
-from .config import LABEL_NAMES, DataConfig, add_config_args, config_from_args
+from .config import LABEL_NAMES, SPLITS, DataConfig, add_config_args, config_from_args
 from .io import setup_logging
 from .transforms import crop_center_by_percentage, demamba_crop_percentage
 
 
 def clip_options(cfg: DataConfig) -> dict:
-    return {"size": 224, "crop": "demamba", "jpeg_quality": 95, "keep_native": ["test"]} | cfg.clips
+    return {"size": 224, "crop": "demamba", "jpeg_quality": 95, "keep_native": ["test"], "bottleneck": 0,
+            "reencode_crf": 0} | cfg.clips
 
 
 def clip_path_for(clips_dir: Path, row: dict) -> Path:
     return clips_dir / row["split"] / LABEL_NAMES[int(row["label"])] / row["generator"] / f"{row['video_id']}.tar"
 
 
-def crop_for(opts: dict, split: str, generator: str, label: int) -> float:
+def crop_for(opts: dict, split: str, generator: str, label: int) -> float | str:
     if opts["crop"] == "demamba":
         return demamba_crop_percentage(split, generator, label)
+    if opts["crop"] == "square":  # 2026-11-14: centered square crop, so the aspect ratio cannot leak
+        return "square"
     return float(opts["crop"] or 0.0)
 
 
-def shrink_jpeg(data: bytes, crop: float, size: int, quality: int) -> bytes:
+def crop_center_square(img: np.ndarray) -> np.ndarray:
+    h, w = img.shape[:2]
+    s = min(h, w)
+    y, x = (h - s) // 2, (w - s) // 2
+    return img[y:y + s, x:x + s]
+
+
+def shrink_jpeg(data: bytes, crop: float | str, size: int, quality: int, bottleneck: int = 0) -> bytes:
+    """Decode -> crop -> resize to size x size -> JPEG. With bottleneck = B (C2 v2, 2026-11-15) the frame then goes
+    down to B x B (INTER_AREA) and back up to size x size (INTER_LINEAR), so every source keeps at most the detail
+    of a B-pixel image whatever its native resolution."""
     img = cv2.imdecode(np.frombuffer(data, np.uint8), cv2.IMREAD_COLOR)
     if img is None:
         raise RuntimeError("cannot decode frame")
-    if crop:
+    if crop == "square":
+        img = crop_center_square(img)
+    elif crop:
         img = crop_center_by_percentage(img, crop)
     img = cv2.resize(img, (size, size), interpolation=cv2.INTER_LINEAR)
+    if bottleneck and bottleneck < size:
+        img = cv2.resize(img, (bottleneck, bottleneck), interpolation=cv2.INTER_AREA)
+        img = cv2.resize(img, (size, size), interpolation=cv2.INTER_LINEAR)
     ok, buf = cv2.imencode(".jpg", img, [cv2.IMWRITE_JPEG_QUALITY, quality])
     if not ok:
         raise RuntimeError("jpeg encode failed")
     return buf.tobytes()
+
+
+def reencode_frames(frames: list[bytes], size: int, side: int, crf: int, quality: int, fps: int = 8,
+                    ffmpeg: str = "ffmpeg") -> list[bytes]:
+    """C2 v3 (2026-11-16): one common compression generation for every clip. The size x size JPEG frames go down to
+    side x side (INTER_AREA), are encoded together as one H.264 stream (libx264, preset medium, CRF crf, yuv420p,
+    fps, one GOP, single thread; libx264 is still not bit-exact run to run, see the test), decoded, and go back up to size x size
+    (INTER_LINEAR) -> JPEG. Whatever codec/scale a source had, every clip then ends with the same codec at the same
+    scale."""
+    imgs = []
+    for b in frames:
+        img = cv2.imdecode(np.frombuffer(b, np.uint8), cv2.IMREAD_COLOR)
+        if img is None:
+            raise RuntimeError("cannot decode frame")
+        imgs.append(cv2.resize(img, (side, side), interpolation=cv2.INTER_AREA))
+    raw = np.ascontiguousarray(np.stack(imgs)).tobytes()
+    enc = subprocess.run([ffmpeg, "-v", "error", "-f", "rawvideo", "-pix_fmt", "bgr24", "-s", f"{side}x{side}",
+                          "-r", str(fps), "-i", "-", "-c:v", "libx264", "-preset", "medium", "-crf", str(crf),
+                          "-pix_fmt", "yuv420p", "-g", str(len(imgs)), "-threads", "1", "-filter_threads", "1",
+                          "-x264-params", "threads=1:lookahead-threads=1:sliced-threads=0", "-f", "h264", "-"],
+                         input=raw, capture_output=True, check=True).stdout
+    dec = subprocess.run([ffmpeg, "-v", "error", "-threads", "1", "-f", "h264", "-i", "-", "-filter_threads", "1",
+                          "-f", "rawvideo", "-pix_fmt", "bgr24", "-"], input=enc, capture_output=True, check=True).stdout
+    n = len(dec) // (side * side * 3)
+    if n != len(imgs):
+        raise RuntimeError(f"re-encode returned {n} frames, expected {len(imgs)}")
+    out = []
+    for img in np.frombuffer(dec, np.uint8).reshape(n, side, side, 3):
+        img = cv2.resize(img, (size, size), interpolation=cv2.INTER_LINEAR)
+        ok, buf = cv2.imencode(".jpg", img, [cv2.IMWRITE_JPEG_QUALITY, quality])
+        if not ok:
+            raise RuntimeError("jpeg encode failed")
+        out.append(buf.tobytes())
+    return out
 
 
 def write_clip(path: Path, frames: list[bytes], meta: dict) -> int:
@@ -90,9 +143,14 @@ def build_clip(frames: list[bytes], meta: dict, opts: dict, path: Path, clips_ro
     """Shrink native JPEG frames and store them as one clip; returns the clip meta."""
     crop = crop_for(opts, meta["split"], meta["generator"], int(meta["label"]))
     size, quality = int(opts["size"]), int(opts["jpeg_quality"])
-    small = [shrink_jpeg(b, crop, size, quality) for b in frames]
+    bottleneck = int(opts.get("bottleneck") or 0)
+    small = [shrink_jpeg(b, crop, size, quality, bottleneck) for b in frames]
+    crf = int(opts.get("reencode_crf") or 0)
+    if crf:  # C2 v3: common H.264 generation at the bottleneck scale
+        small = reencode_frames(small, size, bottleneck or size, crf, quality)
     meta = meta | {"native_height": meta["height"], "native_width": meta["width"], "native_bytes": meta["bytes"],
                    "height": size, "width": size, "crop": crop, "clip_quality": quality,
+                   "bottleneck": bottleneck, "reencode_crf": crf,
                    "clip_path": path.relative_to(clips_root).as_posix(), "bytes": sum(map(len, small))}
     meta["clip_bytes"] = write_clip(path, small, meta)
     got, _ = read_clip(path)
@@ -124,7 +182,7 @@ def convert_one(job: dict) -> dict:
 def main(argv=None) -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     add_config_args(ap)
-    ap.add_argument("--split", choices=["train", "test"], nargs="*", default=["train", "test"])
+    ap.add_argument("--split", choices=SPLITS, nargs="*", default=["train", "test"])
     args = ap.parse_args(argv)
     cfg = config_from_args(args)
     log = setup_logging(cfg.logs_dir / "clips.log")

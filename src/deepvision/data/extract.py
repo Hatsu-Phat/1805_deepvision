@@ -31,7 +31,7 @@ from tqdm import tqdm
 
 from . import ffmpeg
 from .clips import build_clip, clip_options, clip_path_for, convert_one, load_clip_meta
-from .config import LABEL_NAMES, DataConfig, add_config_args, config_from_args
+from .config import LABEL_NAMES, SPLITS, DataConfig, add_config_args, config_from_args
 from .io import setup_logging
 from .sampling import sampling_rate, window_start
 
@@ -124,7 +124,10 @@ def extract_one(job: dict) -> dict:
     num = int(opts["num_frames"])
     try:
         duration = float(job["duration"])
-        rate = sampling_rate(duration, num, int(opts["base_fps"]), opts.get("min_duration_for_base_fps"))
+        if opts["base_fps"] == "native":  # T0': consecutive frames at the source frame rate
+            rate = max(1, round(float(job["fps"])))
+        else:
+            rate = sampling_rate(duration, num, int(opts["base_fps"]), opts.get("min_duration_for_base_fps"))
         expected = max(1, round(duration * rate))
         s_est = window_start(expected, num, opts["window"])
         keep = range(max(0, s_est - BUFFER_MARGIN), s_est + num + BUFFER_MARGIN)
@@ -217,7 +220,7 @@ def collect_index(cfg: DataConfig, manifest: pd.DataFrame, clips: bool = False) 
 def main(argv=None) -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     add_config_args(ap)
-    ap.add_argument("--split", choices=["train", "test"], nargs="*", default=["train", "test"])
+    ap.add_argument("--split", choices=SPLITS, nargs="*", default=["train", "test"])
     ap.add_argument("--limit-per-generator", type=int, default=0, help="pilot mode: first N videos per generator")
     ap.add_argument("--generators", nargs="*", help="restrict to these generators")
     ap.add_argument("--tag", default="", help="suffix for the error/summary files")
@@ -266,7 +269,7 @@ def main(argv=None) -> None:
                     done.append(res)
                 if i % 2000 == 1999:
                     save(done, errors)  # keep partial results if the run is killed
-                    if min_free and shutil.disk_usage(cfg.frames_dir).free < min_free:
+                    if min_free and shutil.disk_usage(cfg.out_root).free < min_free:
                         log.warning("free disk space below %.0f GB, stopping", min_free / 2**30)
                         stopped = True
                         break

@@ -23,7 +23,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from .config import DataConfig, add_config_args, config_from_args
+from .config import EVAL_SPLITS, DataConfig, add_config_args, config_from_args
 from .io import setup_logging
 
 MOVES_COLUMNS = ["time", "path", "src", "dst", "reason", "action"]
@@ -49,10 +49,14 @@ def _quick_hash(path: Path, chunk: int = 1 << 16) -> str:
     return h.hexdigest()
 
 
-def classify(inv: pd.DataFrame, min_duration: float, min_side: int) -> pd.DataFrame:
+def classify(inv: pd.DataFrame, min_duration: float, min_side: int, min_fps: float = 0.0,
+             filter_eval: bool = False) -> pd.DataFrame:
+    """Status per video. Exclusions only add a note on eval splits, unless filter_eval (C2 protocol,
+    2026-11-14: the same fps / duration / frame-size floor on every split, so no split keeps videos the
+    common clip grid cannot represent)."""
     st = inv[["path", "source", "split", "label", "generator", "size_bytes"]].copy()
     st["status"], st["reason"], st["note"] = "ok", "", ""
-    is_test = st["split"] == "test"
+    is_test = st["split"].isin(EVAL_SPLITS) & (not filter_eval)
 
     def mark(mask, status, reason):
         sel = mask & (st["status"] == "ok")
@@ -70,6 +74,8 @@ def classify(inv: pd.DataFrame, min_duration: float, min_side: int) -> pd.DataFr
     mark(inv["duration"].fillna(0) <= 0, "broken", "no duration")
     mark(inv["duration"] < min_duration, "excluded", f"duration < {min_duration}s")
     mark(inv[["width", "height"]].min(axis=1) < min_side, "excluded", f"min side < {min_side}px")
+    if min_fps:
+        mark(inv["fps"].fillna(0) < min_fps, "excluded", f"fps < {min_fps}")
     return st
 
 
@@ -85,14 +91,15 @@ def find_duplicates(cfg: DataConfig, st: pd.DataFrame, log) -> pd.DataFrame:
     if cand.empty:
         return st
     cand["md5"] = [_md5(cfg.raw_root / p) for p in cand["path"]]
-    # keep test before train so that a train copy of a test video is the one dropped
-    cand = cand.sort_values(["md5", "split", "path"], key=lambda s: s.map({"test": 0, "train": 1}) if s.name == "split" else s)
+    # keep test before train before train2 so that the later copy is the one dropped
+    rank = {"test": 0, "vif_test": 0, "aigvd_test": 0, "aigvd_int": 0, "train": 1, "train2": 2, "vif_train": 3}
+    cand = cand.sort_values(["md5", "split", "path"], key=lambda s: s.map(rank) if s.name == "split" else s)
     dup = cand[cand.duplicated("md5", keep="first")]
     first = cand.drop_duplicates("md5", keep="first").set_index("md5")["path"]
     n_excluded = 0
     for i, row in dup.iterrows():
         reason = f"duplicate of {first[row['md5']]}"
-        if row["split"] == "test":  # duplicates inside the benchmark are kept as-is
+        if row["split"] in EVAL_SPLITS:  # duplicates inside the benchmark are kept as-is
             st.loc[i, "note"] = reason
             continue
         st.loc[i, "status"] = "excluded"
@@ -118,7 +125,8 @@ def add_extract_errors(cfg: DataConfig, st: pd.DataFrame, log) -> pd.DataFrame:
 def cmd_check(cfg: DataConfig, args, log) -> None:
     inv = pd.read_csv(cfg.inventory_dir / "inventory.csv")
     v = cfg.validation
-    st = classify(inv, float(v.get("min_duration", 0.5)), int(v.get("min_side", 64)))
+    st = classify(inv, float(v.get("min_duration", 0.5)), int(v.get("min_side", 64)),
+                  float(v.get("min_fps", 0.0)), bool(v.get("filter_eval", False)))
     if not args.skip_duplicates:
         st = find_duplicates(cfg, st, log)
     if args.with_extract_errors:

@@ -45,6 +45,24 @@ def test_classify():
     assert st.loc["f.mp4", "status"] == "broken"
 
 
+def test_classify_c2_filters_eval_splits():
+    inv = pd.DataFrame([
+        inv_row("a.mp4", split="aigvd_test"),
+        inv_row("lowfps.mp4", split="aigvd_test", fps=3.0),
+        inv_row("short.mp4", split="aigvd_test", duration=1.5),
+        inv_row("small.mp4", split="aigvd_test", width=192, height=192),
+        inv_row("train_lowfps.mp4", fps=6.0),
+    ])
+    old = classify(inv, min_duration=2.0, min_side=224, min_fps=8).set_index("path")
+    assert (old.loc[["lowfps.mp4", "short.mp4", "small.mp4"], "status"] == "ok").all()  # eval: note only
+    assert old.loc["lowfps.mp4", "note"] == "fps < 8"
+    assert old.loc["train_lowfps.mp4", "status"] == "excluded"
+    c2 = classify(inv, min_duration=2.0, min_side=224, min_fps=8, filter_eval=True).set_index("path")
+    assert c2.loc["a.mp4", "status"] == "ok"
+    assert (c2.loc[["lowfps.mp4", "short.mp4", "small.mp4", "train_lowfps.mp4"], "status"] == "excluded").all()
+    assert c2.loc["small.mp4", "reason"] == "min side < 224px"
+
+
 def make_cfg(tmp_path):
     return DataConfig(raw_root=tmp_path / "raw", out_root=tmp_path / "out", quarantine_root=tmp_path / "q",
                       sources=[Source("s", "s", "train", 1, "G")])
@@ -65,6 +83,20 @@ def test_duplicates_prefer_test_copy(tmp_path):
     assert st.loc["train/x.mp4", "status"] == "excluded"
     assert st.loc["test/y.mp4", "status"] == "ok"
     assert st.loc["train/z.mp4", "status"] == "ok"
+
+
+def test_duplicates_keep_train_before_train2(tmp_path):
+    cfg = make_cfg(tmp_path)
+    for name in ("more/a.mp4", "base/b.mp4"):
+        p = cfg.raw_root / name
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_bytes(b"same")
+    st = pd.DataFrame([
+        dict(path="more/a.mp4", source="m", split="train2", label=0, generator="youku", size_bytes=4, status="ok", reason=""),
+        dict(path="base/b.mp4", source="s", split="train", label=0, generator="youku", size_bytes=4, status="ok", reason=""),
+    ])
+    st = find_duplicates(cfg, st, LOG).set_index("path")
+    assert st.loc["base/b.mp4", "status"] == "ok" and st.loc["more/a.mp4", "status"] == "excluded"
 
 
 def test_quarantine_and_restore_roundtrip(tmp_path):

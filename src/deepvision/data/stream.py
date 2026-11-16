@@ -28,6 +28,7 @@ from typing import IO, Iterator
 import numpy as np
 import pandas as pd
 
+from .config import SPLITS
 from .dataset import decode_rgb
 from .sampling import uniform_indices
 from .shards import iter_shard
@@ -111,8 +112,13 @@ def iter_shard_retry(root: str, path: str, rclone: str = "rclone", retries: int 
             time.sleep(backoff * attempt)
 
 
-def select_frames(frames: list, num_frames: int) -> tuple[list, int]:
-    """Evenly spaced frames; a video with fewer frames repeats its last one. Returns (frames, n_valid)."""
+def select_frames(frames: list, num_frames: int, indices: list[int] | None = None) -> tuple[list, int]:
+    """Evenly spaced frames (or the given clip indices); a video with fewer frames repeats its last one.
+    Returns (frames, n_valid)."""
+    if indices is not None:
+        valid = [j for j in indices if j < len(frames)]
+        last = valid[-1] if valid else 0
+        return [frames[j if j < len(frames) else last] for j in indices], len(valid)
     idx = uniform_indices(len(frames), num_frames)
     n_valid = len(idx)
     if n_valid < num_frames:
@@ -140,12 +146,14 @@ class ShardStream(IterableDataset):
     def __init__(self, root: str, shards: list[str], num_frames: int = 8, streams: int = 2,
                  decode: str = "none", keep: set[str] | None = None, shuffle_shards: bool = False,
                  shuffle_buffer: int = 0, seed: int = 0, retries: int = 3, backoff: float = 5.0,
-                 rclone: str = "rclone", prefetch: int = 64):
+                 rclone: str = "rclone", prefetch: int = 64, frame_indices: list[int] | None = None):
+        """frame_indices: fixed clip indices to keep instead of `num_frames` evenly spaced ones."""
         if decode not in ("none", "cpu"):
             raise ValueError(f"unknown decode {decode!r}")
         self.root = str(root)
         self.shards = list(shards)
-        self.num_frames = num_frames
+        self.num_frames = num_frames if frame_indices is None else len(frame_indices)
+        self.frame_indices = None if frame_indices is None else list(frame_indices)
         self.streams = max(1, streams)
         self.decode = decode
         self.keep = keep
@@ -177,7 +185,7 @@ class ShardStream(IterableDataset):
             video_id = meta.get("video_id", key.rsplit("/", 1)[-1])
             if self.keep is not None and video_id not in self.keep:
                 continue
-            chosen, n_valid = select_frames(frames, self.num_frames)
+            chosen, n_valid = select_frames(frames, self.num_frames, self.frame_indices)
             yield {"key": key, "video_id": video_id, "label": int(meta["label"]),
                    "generator": meta.get("generator", key.split("/", 1)[0]), "shard": name, "pos": pos,
                    "n_valid": n_valid, "frames": chosen}
@@ -341,7 +349,7 @@ def benchmark(root: str, split: str, n_shards: int, workers: int, streams: int, 
 def main(argv=None) -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--root", required=True, help="rclone remote:path or local directory holding shards/")
-    ap.add_argument("--split", choices=["train", "test"], default="test")
+    ap.add_argument("--split", choices=SPLITS, default="test")
     ap.add_argument("--shards", type=int, default=1, help="read the first N shards")
     ap.add_argument("--workers", type=int, default=0, help="DataLoader workers (0 = this process)")
     ap.add_argument("--streams", type=int, default=2, help="shards open at once per worker")

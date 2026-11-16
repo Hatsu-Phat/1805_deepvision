@@ -62,3 +62,11 @@ def test_invalid_splits(indices):
     s = build_splits(train, test)
     with pytest.raises(ValueError, match="more than one split"):
         check_splits(pd.concat([s, s.iloc[:1].assign(split="test")]))
+
+
+def test_no_holdout_trains_on_every_train_video(indices):
+    train, test = indices
+    s = build_splits(train, test, ood_real_frac=0.0, holdout=())
+    assert len(eval_set(s, "val_ood")) == 0
+    assert set(eval_set(s, "train")["video_id"]) == set(train["video_id"])
+    assert split_counts(s)["train"]["videos"] == len(train)

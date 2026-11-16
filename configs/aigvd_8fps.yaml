@@ -1,0 +1,76 @@
+# AIGVDBench test split (CVPR 2026, arXiv:2601.11035; HF AIGVDBench/AIGVDBench, CC-BY-4.0, downloaded 2026-11-14).
+# Test videos only (scripts/aigvdbench/unpack.py): OpenVid-HD reals + open-source T2V/I2V/V2V = the 3,000 Video_id of
+# Split/test.jsonl; closed-source sets are test-only (2,000 each). Kept at native fps/resolution (H.264 re-encode).
+# Same grid as configs/vif_8fps.yaml: 16 frames on an 8 fps grid, centered window.
+# Crop: DeMamba test crop (0.10), as ViF.
+raw_root: H:/lab/AIVDetection/data/AIGVDBench/videos
+out_root: H:/lab/AIVDetection/data/deepvision_processed/aigvd_8fps
+quarantine_root: H:/lab/AIVDetection/data/_quarantine_corrupt/aigvd
+
+video_extensions: [.mp4]
+ignore_patterns: ["__MACOSX", "/._"]
+
+workers: 6
+
+sources:
+  - {name: closedsource_causvid_24fps, dir: ClosedSource/causvid_24fps, split: aigvd_test, label: 1, generator: causvid_24fps}
+  - {name: closedsource_gen2, dir: ClosedSource/Gen2, split: aigvd_test, label: 1, generator: Gen2}
+  - {name: closedsource_gen3, dir: ClosedSource/Gen3, split: aigvd_test, label: 1, generator: Gen3}
+  - {name: closedsource_jimeng, dir: ClosedSource/Jimeng, split: aigvd_test, label: 1, generator: Jimeng}
+  - {name: closedsource_kling, dir: ClosedSource/kling, split: aigvd_test, label: 1, generator: kling}
+  - {name: closedsource_luma, dir: ClosedSource/Luma, split: aigvd_test, label: 1, generator: Luma}
+  - {name: closedsource_opensora, dir: ClosedSource/Opensora, split: aigvd_test, label: 1, generator: Opensora}
+  - {name: closedsource_pika, dir: ClosedSource/pika, split: aigvd_test, label: 1, generator: pika}
+  - {name: closedsource_sora, dir: ClosedSource/Sora, split: aigvd_test, label: 1, generator: Sora}
+  - {name: closedsource_vidu, dir: ClosedSource/vidu, split: aigvd_test, label: 1, generator: vidu}
+  - {name: closedsource_wan, dir: ClosedSource/wan, split: aigvd_test, label: 1, generator: wan}
+  - {name: opensource_i2v_easyanimate, dir: OpenSource-I2V/EasyAnimate, split: aigvd_test, label: 1, generator: I2V-EasyAnimate}
+  - {name: opensource_i2v_ltx, dir: OpenSource-I2V/LTX, split: aigvd_test, label: 1, generator: I2V-LTX}
+  - {name: opensource_i2v_pyramid_flow, dir: OpenSource-I2V/Pyramid-Flow, split: aigvd_test, label: 1, generator: I2V-Pyramid-Flow}
+  - {name: opensource_i2v_seine, dir: OpenSource-I2V/SEINE, split: aigvd_test, label: 1, generator: I2V-SEINE}
+  - {name: opensource_i2v_svd, dir: OpenSource-I2V/SVD, split: aigvd_test, label: 1, generator: I2V-SVD}
+  - {name: opensource_i2v_videocrafter, dir: OpenSource-I2V/VideoCrafter, split: aigvd_test, label: 1, generator: I2V-VideoCrafter}
+  - {name: opensource_t2v_accvideo, dir: OpenSource-T2V/AccVideo, split: aigvd_test, label: 1, generator: T2V-AccVideo}
+  - {name: opensource_t2v_animatediff, dir: OpenSource-T2V/AnimateDiff, split: aigvd_test, label: 1, generator: T2V-AnimateDiff}
+  - {name: opensource_t2v_cogvideox1_5, dir: OpenSource-T2V/Cogvideox1.5, split: aigvd_test, label: 1, generator: T2V-Cogvideox1.5}
+  - {name: opensource_t2v_easyanimate, dir: OpenSource-T2V/EasyAnimate, split: aigvd_test, label: 1, generator: T2V-EasyAnimate}
+  - {name: opensource_t2v_hunyuanvideo, dir: OpenSource-T2V/HunyuanVideo, split: aigvd_test, label: 1, generator: T2V-HunyuanVideo}
+  - {name: opensource_t2v_ipoc, dir: OpenSource-T2V/IPOC, split: aigvd_test, label: 1, generator: T2V-IPOC}
+  - {name: opensource_t2v_ltx, dir: OpenSource-T2V/LTX, split: aigvd_test, label: 1, generator: T2V-LTX}
+  - {name: opensource_t2v_open_sora, dir: OpenSource-T2V/Open-Sora, split: aigvd_test, label: 1, generator: T2V-Open-Sora}
+  - {name: opensource_t2v_pyramid_flow, dir: OpenSource-T2V/Pyramid-Flow, split: aigvd_test, label: 1, generator: T2V-Pyramid-Flow}
+  - {name: opensource_t2v_repvideo, dir: OpenSource-T2V/RepVideo, split: aigvd_test, label: 1, generator: T2V-RepVideo}
+  - {name: opensource_v2v_cogvideox1_5, dir: OpenSource-V2V/Cogvideox1.5, split: aigvd_test, label: 1, generator: V2V-Cogvideox1.5}
+  - {name: opensource_v2v_ltx, dir: OpenSource-V2V/LTX, split: aigvd_test, label: 1, generator: V2V-LTX}
+  - {name: real_real, dir: Real/Real, split: aigvd_test, label: 0, generator: OpenVid-HD}
+  - {name: opensource_t2v_wan2_1, dir: OpenSource-T2V/Wan2.1, split: aigvd_test, label: 1, generator: T2V-Wan2.1}
+
+validation:
+  min_duration: 0.5
+  min_side: 64
+  probe_timeout: 60
+  decode_timeout: 120
+
+extraction:
+  num_frames: 16
+  base_fps: 8
+  min_duration_for_base_fps: 2.0
+  window: center
+  jpeg_quality: 95
+  max_short_side: 0
+  decode_timeout: 300
+  min_free_gb: 50
+  output: clips
+
+clips:
+  size: 224
+  crop: demamba
+  jpeg_quality: 95
+  keep_native: []
+
+shards:
+  videos_per_shard: 3000
+
+drive:
+  remote: gdrive:DeepVision/aigvd_8fps_v1
+  rclone: rclone

@@ -1,0 +1,65 @@
+# C2 v3 (2026-11-16, reports/c2_protocol.md §8 in the workspace): C2 v2 + common H.264 generation: frames ->
+# 192 x 192 (INTER_AREA) -> libx264 preset medium CRF 23 yuv420p 8 fps 1 GOP -> decode -> 224 (INTER_LINEAR)
+# -> JPEG q95 (clips.reencode_frames). T1 short view: frames 4-11 of the v2 clip (centered 1 s, 8 frames). Clips derived from the v2 clips by scripts/c2/derive_v3.py
+# (workspace).
+# GenVideo-C2 test (C2 v2, 2026-11-15; workspace reports/c2_protocol.md §7). The GenVideo test split as published cannot
+# be put on the C2 grid: all 10,000 MSR-VTT reals are 3 fps (C2 floor: fps >= 8) and HotShot / MoonValley / most of
+# Crafter are < 2 s. GenVideo-C2 test = every test fake that passes the C2 floor (8 generators) + 2,000 Youku reals of
+# train2 (md5 order, the 500 intervention reals excluded; scripts/c2/process_genvideo_c2.py in the workspace), all
+# through the C2 v2 clip path (8 fps grid 2 s, short side -> 224, square crop, bottleneck 192). The reals come from
+# the GenVideo TRAINING real source, so this set measures fake detection against Youku content, not against MSR-VTT.
+raw_root: H:/lab/AIVDetection/data
+out_root: H:/lab/AIVDetection/data/deepvision_processed/genvideo_c2v3c23s
+quarantine_root: H:/lab/AIVDetection/data/_quarantine_corrupt/genvideo_c2v3c23s
+
+video_extensions: [.mp4, .avi, .mov, .mkv, .webm, .gif]
+ignore_patterns: ["__MACOSX", "/._"]
+
+workers: 6
+
+sources:
+  - {name: youku_more,  dir: Youku_1M_10s_more,                          split: test, label: 0, generator: youku}
+  - {name: crafter,     dir: GenVideo-Val/GenVideo-Val/Fake/Crafter,     split: test, label: 1, generator: Crafter}
+  - {name: gen2,        dir: GenVideo-Val/GenVideo-Val/Fake/Gen2,        split: test, label: 1, generator: Gen2}
+  - {name: hotshot,     dir: GenVideo-Val/GenVideo-Val/Fake/HotShot,     split: test, label: 1, generator: HotShot}
+  - {name: lavie,       dir: GenVideo-Val/GenVideo-Val/Fake/Lavie,       split: test, label: 1, generator: Lavie}
+  - {name: modelscope,  dir: GenVideo-Val/GenVideo-Val/Fake/ModelScope,  split: test, label: 1, generator: ModelScope}
+  - {name: moonvalley,  dir: GenVideo-Val/GenVideo-Val/Fake/MoonValley,  split: test, label: 1, generator: MoonValley}
+  - {name: morphstudio, dir: GenVideo-Val/GenVideo-Val/Fake/MorphStudio, split: test, label: 1, generator: MorphStudio}
+  - {name: show1,       dir: GenVideo-Val/GenVideo-Val/Fake/Show_1,      split: test, label: 1, generator: Show_1}
+  - {name: sora,        dir: GenVideo-Val/GenVideo-Val/Fake/Sora,        split: test, label: 1, generator: Sora}
+  - {name: wildscrape,  dir: GenVideo-Val/GenVideo-Val/Fake/WildScrape,  split: test, label: 1, generator: WildScrape}
+
+validation:
+  min_duration: 2.0
+  min_side: 224
+  min_fps: 8
+  filter_eval: true
+  probe_timeout: 60
+  decode_timeout: 120
+
+extraction:
+  num_frames: 16
+  base_fps: 8
+  min_duration_for_base_fps: 2.0
+  window: center
+  jpeg_quality: 95
+  max_short_side: 224
+  decode_timeout: 300
+  min_free_gb: 50
+  output: clips
+
+clips:
+  size: 224
+  crop: square
+  jpeg_quality: 95
+  keep_native: []
+  bottleneck: 192
+  reencode_crf: 23
+
+shards:
+  videos_per_shard: 3000
+
+drive:
+  remote: gdrive:DeepVision/genvideo_c2v3c23s_v1
+  rclone: rclone

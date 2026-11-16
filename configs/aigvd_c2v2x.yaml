@@ -1,0 +1,92 @@
+# C2 v2 extra (2026-11-16): the 144 OpenVid-HD reals of the AIGVDBench intervention whose original was missing from the
+# aigvd_c2v2 subset (video_id is shared with V2V/I2V fakes, so the first top-up matched fake rows); originals only, for
+# C2-G1 on all 500 pairs. Same clips as aigvd_c2v2 (derived from v1 clips, B = 192).
+# C2 v2 (2026-11-15, reports/c2_protocol.md §6 in the workspace): C2 v1 + bandwidth bottleneck. After the square crop every
+# frame goes 224 -> 192 x 192 (INTER_AREA) -> 224 (INTER_LINEAR), so no source keeps more detail than a 192-px image
+# (B picked on a dev half of the intervention reals: C2-G2 r320 0.596 dev, 0.551 holdout). Clips derived from the v1
+# clips by scripts/c2/derive_v2.py (workspace); clips.bottleneck does the same in clips.shrink_jpeg.
+# C2 v1 processing-controlled protocol (2026-11-14, reports/c2_protocol.md in the workspace): every video gets the
+# same clip path, whatever its source: 16 frames on an 8 fps grid (2 s, centered window) -> short side to 224 px
+# (INTER_AREA, downscale only) -> centered square crop -> 224 x 224 JPEG q95. Videos that the grid cannot represent
+# without upsampling are excluded on EVERY split (filter_eval): fps < 8, duration < 2 s, short side < 224 px.
+# Built from configs/aigvd_ctrl8.yaml (same sources); only the validation floor and max_short_side differ.
+# AIGVDBench test split (CVPR 2026, arXiv:2601.11035; HF AIGVDBench/AIGVDBench, CC-BY-4.0, downloaded 2026-11-14).
+# Test videos only (scripts/aigvdbench/unpack.py): OpenVid-HD reals + open-source T2V/I2V/V2V = the 3,000 Video_id of
+# Split/test.jsonl; closed-source sets are test-only (2,000 each). Kept at native fps/resolution (H.264 re-encode).
+# Same grid as configs/vif_8fps.yaml: 16 frames on an 8 fps grid, centered window.
+# Crop: centered square (2026-11-14), so the aspect ratio cannot leak; as configs/vif_ctrl8.yaml.
+raw_root: H:/lab/AIVDetection/data/AIGVDBench/videos
+out_root: H:/lab/AIVDetection/data/deepvision_processed/aigvd_c2v2x
+quarantine_root: H:/lab/AIVDetection/data/_quarantine_corrupt/aigvd
+
+video_extensions: [.mp4]
+ignore_patterns: ["__MACOSX", "/._"]
+
+workers: 6
+
+sources:
+  - {name: closedsource_causvid_24fps, dir: ClosedSource/causvid_24fps, split: aigvd_test, label: 1, generator: causvid_24fps}
+  - {name: closedsource_gen2, dir: ClosedSource/Gen2, split: aigvd_test, label: 1, generator: Gen2}
+  - {name: closedsource_gen3, dir: ClosedSource/Gen3, split: aigvd_test, label: 1, generator: Gen3}
+  - {name: closedsource_jimeng, dir: ClosedSource/Jimeng, split: aigvd_test, label: 1, generator: Jimeng}
+  - {name: closedsource_kling, dir: ClosedSource/kling, split: aigvd_test, label: 1, generator: kling}
+  - {name: closedsource_luma, dir: ClosedSource/Luma, split: aigvd_test, label: 1, generator: Luma}
+  - {name: closedsource_opensora, dir: ClosedSource/Opensora, split: aigvd_test, label: 1, generator: Opensora}
+  - {name: closedsource_pika, dir: ClosedSource/pika, split: aigvd_test, label: 1, generator: pika}
+  - {name: closedsource_sora, dir: ClosedSource/Sora, split: aigvd_test, label: 1, generator: Sora}
+  - {name: closedsource_vidu, dir: ClosedSource/vidu, split: aigvd_test, label: 1, generator: vidu}
+  - {name: closedsource_wan, dir: ClosedSource/wan, split: aigvd_test, label: 1, generator: wan}
+  - {name: opensource_i2v_easyanimate, dir: OpenSource-I2V/EasyAnimate, split: aigvd_test, label: 1, generator: I2V-EasyAnimate}
+  - {name: opensource_i2v_ltx, dir: OpenSource-I2V/LTX, split: aigvd_test, label: 1, generator: I2V-LTX}
+  - {name: opensource_i2v_pyramid_flow, dir: OpenSource-I2V/Pyramid-Flow, split: aigvd_test, label: 1, generator: I2V-Pyramid-Flow}
+  - {name: opensource_i2v_seine, dir: OpenSource-I2V/SEINE, split: aigvd_test, label: 1, generator: I2V-SEINE}
+  - {name: opensource_i2v_svd, dir: OpenSource-I2V/SVD, split: aigvd_test, label: 1, generator: I2V-SVD}
+  - {name: opensource_i2v_videocrafter, dir: OpenSource-I2V/VideoCrafter, split: aigvd_test, label: 1, generator: I2V-VideoCrafter}
+  - {name: opensource_t2v_accvideo, dir: OpenSource-T2V/AccVideo, split: aigvd_test, label: 1, generator: T2V-AccVideo}
+  - {name: opensource_t2v_animatediff, dir: OpenSource-T2V/AnimateDiff, split: aigvd_test, label: 1, generator: T2V-AnimateDiff}
+  - {name: opensource_t2v_cogvideox1_5, dir: OpenSource-T2V/Cogvideox1.5, split: aigvd_test, label: 1, generator: T2V-Cogvideox1.5}
+  - {name: opensource_t2v_easyanimate, dir: OpenSource-T2V/EasyAnimate, split: aigvd_test, label: 1, generator: T2V-EasyAnimate}
+  - {name: opensource_t2v_hunyuanvideo, dir: OpenSource-T2V/HunyuanVideo, split: aigvd_test, label: 1, generator: T2V-HunyuanVideo}
+  - {name: opensource_t2v_ipoc, dir: OpenSource-T2V/IPOC, split: aigvd_test, label: 1, generator: T2V-IPOC}
+  - {name: opensource_t2v_ltx, dir: OpenSource-T2V/LTX, split: aigvd_test, label: 1, generator: T2V-LTX}
+  - {name: opensource_t2v_open_sora, dir: OpenSource-T2V/Open-Sora, split: aigvd_test, label: 1, generator: T2V-Open-Sora}
+  - {name: opensource_t2v_pyramid_flow, dir: OpenSource-T2V/Pyramid-Flow, split: aigvd_test, label: 1, generator: T2V-Pyramid-Flow}
+  - {name: opensource_t2v_repvideo, dir: OpenSource-T2V/RepVideo, split: aigvd_test, label: 1, generator: T2V-RepVideo}
+  - {name: opensource_v2v_cogvideox1_5, dir: OpenSource-V2V/Cogvideox1.5, split: aigvd_test, label: 1, generator: V2V-Cogvideox1.5}
+  - {name: opensource_v2v_ltx, dir: OpenSource-V2V/LTX, split: aigvd_test, label: 1, generator: V2V-LTX}
+  - {name: real_real, dir: Real/Real, split: aigvd_test, label: 0, generator: OpenVid-HD}
+  - {name: opensource_t2v_videocrafter, dir: OpenSource-T2V/VideoCrafter, split: aigvd_test, label: 1, generator: T2V-VideoCrafter}
+  - {name: opensource_t2v_wan2_1, dir: OpenSource-T2V/Wan2.1, split: aigvd_test, label: 1, generator: T2V-Wan2.1}
+
+validation:
+  min_duration: 2.0
+  min_side: 224
+  min_fps: 8
+  filter_eval: true
+  probe_timeout: 60
+  decode_timeout: 120
+
+extraction:
+  num_frames: 16
+  base_fps: 8
+  min_duration_for_base_fps: 2.0
+  window: center
+  jpeg_quality: 95
+  max_short_side: 224
+  decode_timeout: 300
+  min_free_gb: 50
+  output: clips
+
+clips:
+  size: 224
+  crop: square
+  jpeg_quality: 95
+  keep_native: []
+  bottleneck: 192
+
+shards:
+  videos_per_shard: 3000
+
+drive:
+  remote: gdrive:DeepVision/aigvd_c2v2x_v1
+  rclone: rclone

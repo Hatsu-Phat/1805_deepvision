@@ -1,0 +1,99 @@
+# G1 (2026-11-14): ViF-Bench (vif_test) at the D3 protocol: 16 frames on an 8 fps grid (ffmpeg -r 8), centered window.
+# (`base_fps: 8` -> ffmpeg -r <fps>), centered window; everything else as configs/vif.yaml.
+# Own out_root and Drive folder; the manifest is a copy of vif/manifests/vif_test_videos.csv.
+# ViF data (Skyra, arXiv:2512.15693; HF JoeLeelyf/ViF-CoT-4K and JoeLeelyf/ViF-Bench, downloaded 2026-11-09).
+# Same pipeline and options as configs/data.yaml, but its own raw/out roots and Drive folder, so the GenVideo
+# manifests, shards and features are never touched. Built from source_videos.zip (parsed_frames.zip unused).
+#   vif_train = ViF-CoT-4K: 3,502 reals (Panda-70M, Kinetics-400) + 3,502 fakes paired by file name, 7 generators
+#   vif_test  = ViF-Bench: 165 reals + 2,995 fakes, 19 generators; each fake shares its file name with one real
+# Reals in a pair keep the generator of their source dataset; the pair is the video_id (file stem).
+# Crop: every vif split gets the DeMamba test crop (0.10, real and fake alike).
+
+raw_root: H:/lab/AIVDetection/data/ViF
+out_root: H:/lab/AIVDetection/data/deepvision_processed/vif_8fps
+quarantine_root: H:/lab/AIVDetection/data/_quarantine_corrupt/vif
+
+video_extensions: [.mp4]
+ignore_patterns: ["__MACOSX", "/._"]
+
+workers: 6
+
+sources:
+  - {name: cot_panda_70m_real_cogvideox15_5b_i2v, dir: ViF-CoT-4K/source_videos/Panda-70M/real/CogVideoX1.5-5B-I2V, split: vif_train, label: 0, generator: Panda-70M}
+  - {name: cot_panda_70m_real_cogvideox15_5b_t, dir: ViF-CoT-4K/source_videos/Panda-70M/real/CogVideoX1.5-5B-T, split: vif_train, label: 0, generator: Panda-70M}
+  - {name: cot_panda_70m_real_hunyuanvideo, dir: ViF-CoT-4K/source_videos/Panda-70M/real/HunyuanVideo, split: vif_train, label: 0, generator: Panda-70M}
+  - {name: cot_panda_70m_real_hunyuanvideo_i2v, dir: ViF-CoT-4K/source_videos/Panda-70M/real/HunyuanVideo-I2V, split: vif_train, label: 0, generator: Panda-70M}
+  - {name: cot_panda_70m_real_wan21_t2v_13b, dir: ViF-CoT-4K/source_videos/Panda-70M/real/Wan2.1-T2V-1.3B, split: vif_train, label: 0, generator: Panda-70M}
+  - {name: cot_panda_70m_real_wan22_ti2v_5b_i, dir: ViF-CoT-4K/source_videos/Panda-70M/real/Wan2.2-TI2V-5B-I, split: vif_train, label: 0, generator: Panda-70M}
+  - {name: cot_panda_70m_real_wan22_ti2v_5b_t, dir: ViF-CoT-4K/source_videos/Panda-70M/real/Wan2.2-TI2V-5B-T, split: vif_train, label: 0, generator: Panda-70M}
+  - {name: cot_panda_70m_fake_cogvideox15_5b_i2v, dir: ViF-CoT-4K/source_videos/Panda-70M/fake/CogVideoX1.5-5B-I2V, split: vif_train, label: 1, generator: CogVideoX1.5-5B-I2V}
+  - {name: cot_panda_70m_fake_cogvideox15_5b_t, dir: ViF-CoT-4K/source_videos/Panda-70M/fake/CogVideoX1.5-5B-T, split: vif_train, label: 1, generator: CogVideoX1.5-5B-T}
+  - {name: cot_panda_70m_fake_hunyuanvideo, dir: ViF-CoT-4K/source_videos/Panda-70M/fake/HunyuanVideo, split: vif_train, label: 1, generator: HunyuanVideo}
+  - {name: cot_panda_70m_fake_hunyuanvideo_i2v, dir: ViF-CoT-4K/source_videos/Panda-70M/fake/HunyuanVideo-I2V, split: vif_train, label: 1, generator: HunyuanVideo-I2V}
+  - {name: cot_panda_70m_fake_wan21_t2v_13b, dir: ViF-CoT-4K/source_videos/Panda-70M/fake/Wan2.1-T2V-1.3B, split: vif_train, label: 1, generator: Wan2.1-T2V-1.3B}
+  - {name: cot_panda_70m_fake_wan22_ti2v_5b_i, dir: ViF-CoT-4K/source_videos/Panda-70M/fake/Wan2.2-TI2V-5B-I, split: vif_train, label: 1, generator: Wan2.2-TI2V-5B-I}
+  - {name: cot_panda_70m_fake_wan22_ti2v_5b_t, dir: ViF-CoT-4K/source_videos/Panda-70M/fake/Wan2.2-TI2V-5B-T, split: vif_train, label: 1, generator: Wan2.2-TI2V-5B-T}
+  - {name: cot_kinetics_real_cogvideox15_5b_i2v, dir: ViF-CoT-4K/source_videos/kinetics/real/CogVideoX1.5-5B-I2V, split: vif_train, label: 0, generator: Kinetics-400}
+  - {name: cot_kinetics_real_cogvideox15_5b_t, dir: ViF-CoT-4K/source_videos/kinetics/real/CogVideoX1.5-5B-T, split: vif_train, label: 0, generator: Kinetics-400}
+  - {name: cot_kinetics_real_hunyuanvideo, dir: ViF-CoT-4K/source_videos/kinetics/real/HunyuanVideo, split: vif_train, label: 0, generator: Kinetics-400}
+  - {name: cot_kinetics_real_hunyuanvideo_i2v, dir: ViF-CoT-4K/source_videos/kinetics/real/HunyuanVideo-I2V, split: vif_train, label: 0, generator: Kinetics-400}
+  - {name: cot_kinetics_real_wan21_t2v_13b, dir: ViF-CoT-4K/source_videos/kinetics/real/Wan2.1-T2V-1.3B, split: vif_train, label: 0, generator: Kinetics-400}
+  - {name: cot_kinetics_real_wan22_ti2v_5b_i, dir: ViF-CoT-4K/source_videos/kinetics/real/Wan2.2-TI2V-5B-I, split: vif_train, label: 0, generator: Kinetics-400}
+  - {name: cot_kinetics_real_wan22_ti2v_5b_t, dir: ViF-CoT-4K/source_videos/kinetics/real/Wan2.2-TI2V-5B-T, split: vif_train, label: 0, generator: Kinetics-400}
+  - {name: cot_kinetics_fake_cogvideox15_5b_i2v, dir: ViF-CoT-4K/source_videos/kinetics/fake/CogVideoX1.5-5B-I2V, split: vif_train, label: 1, generator: CogVideoX1.5-5B-I2V}
+  - {name: cot_kinetics_fake_cogvideox15_5b_t, dir: ViF-CoT-4K/source_videos/kinetics/fake/CogVideoX1.5-5B-T, split: vif_train, label: 1, generator: CogVideoX1.5-5B-T}
+  - {name: cot_kinetics_fake_hunyuanvideo, dir: ViF-CoT-4K/source_videos/kinetics/fake/HunyuanVideo, split: vif_train, label: 1, generator: HunyuanVideo}
+  - {name: cot_kinetics_fake_hunyuanvideo_i2v, dir: ViF-CoT-4K/source_videos/kinetics/fake/HunyuanVideo-I2V, split: vif_train, label: 1, generator: HunyuanVideo-I2V}
+  - {name: cot_kinetics_fake_wan21_t2v_13b, dir: ViF-CoT-4K/source_videos/kinetics/fake/Wan2.1-T2V-1.3B, split: vif_train, label: 1, generator: Wan2.1-T2V-1.3B}
+  - {name: cot_kinetics_fake_wan22_ti2v_5b_i, dir: ViF-CoT-4K/source_videos/kinetics/fake/Wan2.2-TI2V-5B-I, split: vif_train, label: 1, generator: Wan2.2-TI2V-5B-I}
+  - {name: cot_kinetics_fake_wan22_ti2v_5b_t, dir: ViF-CoT-4K/source_videos/kinetics/fake/Wan2.2-TI2V-5B-T, split: vif_train, label: 1, generator: Wan2.2-TI2V-5B-T}
+  - {name: bench_real, dir: ViF-Bench/source_videos/Real, split: vif_test, label: 0, generator: ViF-Real}
+  - {name: bench_wan21_t2v_13b, dir: ViF-Bench/source_videos/Fake/Wan2.1-T2V-1.3B, split: vif_test, label: 1, generator: Wan2.1-T2V-1.3B}
+  - {name: bench_cogvideox15_5b_t, dir: ViF-Bench/source_videos/Fake/CogVideoX1.5-5B-T, split: vif_test, label: 1, generator: CogVideoX1.5-5B-T}
+  - {name: bench_wan22_ti2v_5b_t, dir: ViF-Bench/source_videos/Fake/Wan2.2-TI2V-5B-T, split: vif_test, label: 1, generator: Wan2.2-TI2V-5B-T}
+  - {name: bench_wan22_ti2v_5b_i, dir: ViF-Bench/source_videos/Fake/Wan2.2-TI2V-5B-I, split: vif_test, label: 1, generator: Wan2.2-TI2V-5B-I}
+  - {name: bench_hunyuanvideo, dir: ViF-Bench/source_videos/Fake/HunyuanVideo, split: vif_test, label: 1, generator: HunyuanVideo}
+  - {name: bench_hunyuanvideo_i2v, dir: ViF-Bench/source_videos/Fake/HunyuanVideo-I2V, split: vif_test, label: 1, generator: HunyuanVideo-I2V}
+  - {name: bench_wan21_vace_13b_t, dir: ViF-Bench/source_videos/Fake/Wan2.1-VACE-1.3B-T, split: vif_test, label: 1, generator: Wan2.1-VACE-1.3B-T}
+  - {name: bench_wan22_t2v_14b, dir: ViF-Bench/source_videos/Fake/Wan2.2-T2V-14B, split: vif_test, label: 1, generator: Wan2.2-T2V-14B}
+  - {name: bench_wan22_i2v_14b, dir: ViF-Bench/source_videos/Fake/Wan2.2-I2V-14B, split: vif_test, label: 1, generator: Wan2.2-I2V-14B}
+  - {name: bench_skyreels_v2, dir: ViF-Bench/source_videos/Fake/SkyReels-V2, split: vif_test, label: 1, generator: SkyReels-V2}
+  - {name: bench_skyreels_v2_i2v_14b_540p, dir: ViF-Bench/source_videos/Fake/SkyReels-V2-I2V-14B-540P, split: vif_test, label: 1, generator: SkyReels-V2-I2V-14B-540P}
+  - {name: bench_ltx_video_13b_t, dir: ViF-Bench/source_videos/Fake/LTX-Video-13B-T, split: vif_test, label: 1, generator: LTX-Video-13B-T}
+  - {name: bench_ltx_video_13b_i, dir: ViF-Bench/source_videos/Fake/LTX-Video-13B-I, split: vif_test, label: 1, generator: LTX-Video-13B-I}
+  - {name: bench_gen4_turbo, dir: ViF-Bench/source_videos/Fake/gen4-turbo, split: vif_test, label: 1, generator: gen4-turbo}
+  - {name: bench_hailuo, dir: ViF-Bench/source_videos/Fake/hailuo, split: vif_test, label: 1, generator: hailuo}
+  - {name: bench_pika_v2, dir: ViF-Bench/source_videos/Fake/pika-v2, split: vif_test, label: 1, generator: pika-v2}
+  - {name: bench_pixverse_v4_5, dir: ViF-Bench/source_videos/Fake/pixverse-v4-5, split: vif_test, label: 1, generator: pixverse-v4-5}
+  - {name: bench_kling_v1, dir: ViF-Bench/source_videos/Fake/kling-v1, split: vif_test, label: 1, generator: kling-v1}
+  - {name: bench_sora_2, dir: ViF-Bench/source_videos/Fake/sora-2, split: vif_test, label: 1, generator: sora-2}
+
+validation:
+  min_duration: 0.5
+  min_side: 64
+  probe_timeout: 60
+  decode_timeout: 120
+
+extraction:
+  num_frames: 16
+  base_fps: 8
+  min_duration_for_base_fps: 2.0
+  window: center
+  jpeg_quality: 95
+  max_short_side: 0
+  decode_timeout: 300
+  min_free_gb: 50
+  output: clips
+
+clips:
+  size: 224
+  crop: demamba
+  jpeg_quality: 95
+  keep_native: []
+
+shards:
+  videos_per_shard: 3000
+
+drive:
+  remote: gdrive:DeepVision/vif_8fps_v1
+  rclone: rclone

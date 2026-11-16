@@ -1,0 +1,56 @@
+# C2 v3 (2026-11-16, reports/c2_protocol.md §8 in the workspace): C2 v2 + common H.264 generation: frames ->
+# 192 x 192 (INTER_AREA) -> libx264 preset medium CRF 23 yuv420p 8 fps 1 GOP -> decode -> 224 (INTER_LINEAR)
+# -> JPEG q95 (clips.reencode_frames). T2 view: 16 frames, 2 s. Clips derived from the v2 clips by scripts/c2/derive_v3.py
+# (workspace).
+# GenVideo intervention under C2 v2 (2026-11-15): the same files as configs/genvideo_int.yaml (500 train2 Youku reals as
+# orig / reenc / fps3 / cut2s / cut2s_fps8) through the C2 v2 clip path. fps3 is excluded by the C2 floor (fps < 8), so
+# C2-G1 on GenVideo compares orig with reenc / cut2s / cut2s_fps8 (clip speed and source fps changed, content kept).
+raw_root: H:/lab/AIVDetection/data/deepvision_processed/genvideo_interventions
+out_root: H:/lab/AIVDetection/data/deepvision_processed/genvideo_int_c2v3c23
+quarantine_root: H:/lab/AIVDetection/data/_quarantine_corrupt/genvideo_int
+
+video_extensions: [.mp4]
+ignore_patterns: ["__MACOSX", "/._", ".tmp.mp4"]
+
+workers: 6
+
+sources:
+  - {name: int_orig, dir: orig, split: genvideo_int, label: 0, generator: youku@orig}
+  - {name: int_reenc, dir: reenc, split: genvideo_int, label: 0, generator: youku@reenc}
+  - {name: int_fps3, dir: fps3, split: genvideo_int, label: 0, generator: youku@fps3}
+  - {name: int_cut2s, dir: cut2s, split: genvideo_int, label: 0, generator: youku@cut2s}
+  - {name: int_cut2s_fps8, dir: cut2s_fps8, split: genvideo_int, label: 0, generator: youku@cut2s_fps8}
+
+validation:
+  min_duration: 2.0
+  min_side: 224
+  min_fps: 8
+  filter_eval: true
+  probe_timeout: 60
+  decode_timeout: 120
+
+extraction:
+  num_frames: 16
+  base_fps: 8
+  min_duration_for_base_fps: 2.0
+  window: center
+  jpeg_quality: 95
+  max_short_side: 224
+  decode_timeout: 300
+  min_free_gb: 50
+  output: clips
+
+clips:
+  size: 224
+  crop: square
+  jpeg_quality: 95
+  keep_native: []
+  bottleneck: 192
+  reencode_crf: 23
+
+shards:
+  videos_per_shard: 3000
+
+drive:
+  remote: gdrive:DeepVision/genvideo_int_c2v3c23_v1
+  rclone: rclone

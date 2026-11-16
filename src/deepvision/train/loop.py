@@ -1,6 +1,7 @@
 """Generic binary-classification training loop with exact resume.
 
-The dataset yields (x, label) with label 1 = fake; the model returns one logit per sample.
+The dataset is indexed with a list of indices and returns a whole batch (x, label), like
+TensorDataset (whose tensors may already sit on the GPU); label 1 = fake; one logit per sample.
 Batch order depends only on (seed, epoch), so a run resumed from ckpt/last.pt replays the same
 batches with the same RNG state as an uninterrupted run. Every log record goes to
 <run_dir>/metrics.jsonl; records written after the checkpoint a run resumes from are dropped.
@@ -18,7 +19,7 @@ from typing import Callable
 
 import numpy as np
 import torch
-from torch.utils.data import DataLoader, Dataset, Sampler
+from torch.utils.data import BatchSampler, DataLoader, Dataset, Sampler, SequentialSampler
 
 from .checkpoint import CheckpointManager, rng_state, set_rng_state
 
@@ -107,7 +108,8 @@ def predict(model: torch.nn.Module, dataset: Dataset, batch_size: int = 512, dev
     device = torch.device(device)
     dtype = autocast_dtype(amp, device)
     model.eval()
-    loader = DataLoader(dataset, batch_size, shuffle=False, num_workers=num_workers,
+    loader = DataLoader(dataset, batch_size=None, num_workers=num_workers,
+                        sampler=BatchSampler(SequentialSampler(range(len(dataset))), batch_size, drop_last=False),
                         generator=torch.Generator().manual_seed(0))
     out = []
     for x, _ in loader:
@@ -188,8 +190,8 @@ class Trainer:
 
         for epoch in range(progress["epoch"], cfg.epochs):
             sampler.set_epoch(epoch, progress["step_in_epoch"] * cfg.batch_size)
-            loader = DataLoader(dataset, cfg.batch_size, sampler=sampler, num_workers=cfg.num_workers,
-                                pin_memory=self.device.type == "cuda",
+            loader = DataLoader(dataset, batch_size=None, num_workers=cfg.num_workers,
+                                sampler=BatchSampler(sampler, cfg.batch_size, drop_last=False),
                                 generator=torch.Generator().manual_seed(cfg.seed))
             self.model.train()
             t0, seen = time.time(), 0

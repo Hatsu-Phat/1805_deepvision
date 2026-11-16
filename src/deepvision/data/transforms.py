@@ -13,7 +13,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-import albumentations as A
 import cv2
 import numpy as np
 
@@ -34,7 +33,7 @@ def crop_center_by_percentage(image: np.ndarray, percentage: float) -> np.ndarra
 
 def demamba_crop_percentage(split: str, generator: str, label: int) -> float:
     """Crop ratio DeMamba applies to a video (0.0 means no crop)."""
-    if split == "train":
+    if split in ("train", "train2"):
         return 0.15 if (label == 0 and generator.lower() == "youku") else 0.0
     return 0.10
 
@@ -48,6 +47,8 @@ class FrameTransform:
     normalize: bool = True
 
     def __post_init__(self):
+        import albumentations as A  # imported here: the clip pipeline (crop + cv2 resize) does not need it
+
         ops = [A.Resize(self.size, self.size, interpolation=self.interpolation)]
         if self.normalize:
             ops.append(A.Normalize(mean=self.mean, std=self.std, max_pixel_value=255.0, p=1.0))

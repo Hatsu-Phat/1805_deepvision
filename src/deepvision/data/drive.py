@@ -17,7 +17,7 @@ import subprocess
 from pathlib import Path
 from typing import Iterator
 
-from .config import DataConfig, add_config_args, config_from_args
+from .config import SPLITS, DataConfig, add_config_args, config_from_args
 from .io import setup_logging
 from .shards import iter_shard
 
@@ -52,7 +52,7 @@ def stream_shard(remote: str, path: str, rclone: str = "rclone") -> Iterator[tup
 def push(cfg: DataConfig, log, transfers: int = 4) -> None:
     remote = cfg.drive["remote"].rstrip("/")
     common = ["--transfers", str(transfers), "--checkers", "8", "--stats", "60s", "--stats-one-line"]
-    for split in ("train", "test"):
+    for split in SPLITS:
         src = cfg.shards_dir / split
         tars = sorted(p.name for p in src.glob(f"{split}-*.tar")) if src.exists() else []
         if not tars:

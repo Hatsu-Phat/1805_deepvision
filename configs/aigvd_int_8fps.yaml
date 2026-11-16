@@ -1,0 +1,47 @@
+# Processing intervention (2026-11-14): 500 AIGVDBench OpenVid-HD reals re-encoded (reenc, 1080p) or
+# downscaled to 720p / 480p / 320p (scripts/aigvdbench/make_interventions.py). Same clip options as
+# configs/aigvd_8fps.yaml; own out_root and Drive folder. The originals are in split aigvd_test (same file names).
+raw_root: H:/lab/AIVDetection/data/deepvision_processed/aigvd_interventions
+out_root: H:/lab/AIVDetection/data/deepvision_processed/aigvd_int_8fps
+quarantine_root: H:/lab/AIVDetection/data/_quarantine_corrupt/aigvd_int
+
+video_extensions: [.mp4]
+ignore_patterns: ["__MACOSX", "/._", ".tmp.mp4", "/_unused/"]
+
+workers: 6
+
+sources:
+  - {name: int_reenc, dir: reenc, split: aigvd_int, label: 0, generator: OpenVid-HD@reenc}
+  - {name: int_r720, dir: r720, split: aigvd_int, label: 0, generator: OpenVid-HD@r720}
+  - {name: int_r480, dir: r480, split: aigvd_int, label: 0, generator: OpenVid-HD@r480}
+  - {name: int_r320, dir: r320, split: aigvd_int, label: 0, generator: OpenVid-HD@r320}
+
+validation:
+  min_duration: 0.5
+  min_side: 64
+  probe_timeout: 60
+  decode_timeout: 120
+
+extraction:
+  num_frames: 16
+  base_fps: 8
+  min_duration_for_base_fps: 2.0
+  window: center
+  jpeg_quality: 95
+  max_short_side: 0
+  decode_timeout: 300
+  min_free_gb: 50
+  output: clips
+
+clips:
+  size: 224
+  crop: demamba
+  jpeg_quality: 95
+  keep_native: []
+
+shards:
+  videos_per_shard: 3000
+
+drive:
+  remote: gdrive:DeepVision/aigvd_int_8fps_v1
+  rclone: rclone
