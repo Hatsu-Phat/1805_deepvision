@@ -1,0 +1,54 @@
+# C2 v3 (2026-11-16, reports/c2_protocol.md §8 in the workspace): fps-conversion intervention (500 OpenVid-HD reals,
+# 1080p, ffmpeg fps=24, CRF 23; scripts/aigvdbench/make_interventions.py) on the C2 v1 grid; clips then go through the
+# v2 bottleneck + v3 re-encode into aigvd_int_c2v3c<crf> (scripts/c2/fps24_v3.py).
+# C2 v1 processing-controlled protocol (2026-11-14, reports/c2_protocol.md in the workspace): every video gets the
+# same clip path, whatever its source: 16 frames on an 8 fps grid (2 s, centered window) -> short side to 224 px
+# (INTER_AREA, downscale only) -> centered square crop -> 224 x 224 JPEG q95. Videos that the grid cannot represent
+# without upsampling are excluded on EVERY split (filter_eval): fps < 8, duration < 2 s, short side < 224 px.
+# Built from configs/aigvd_int_ctrl8.yaml (same sources); only the validation floor and max_short_side differ.
+# Processing intervention (2026-11-14): 500 AIGVDBench OpenVid-HD reals re-encoded (reenc, 1080p) or
+# downscaled to 720p / 480p / 320p (scripts/aigvdbench/make_interventions.py). Same clip options as
+# configs/aigvd_ctrl8.yaml; own out_root and Drive folder. The originals are in split aigvd_test (same file names).
+raw_root: H:/lab/AIVDetection/data/deepvision_processed/aigvd_interventions
+out_root: H:/lab/AIVDetection/data/deepvision_processed/aigvd_fps24_c2
+quarantine_root: H:/lab/AIVDetection/data/_quarantine_corrupt/aigvd_int
+
+video_extensions: [.mp4]
+ignore_patterns: ["__MACOSX", "/._", ".tmp.mp4", "/_unused/"]
+
+workers: 6
+
+sources:
+  - {name: int_fps24, dir: fps24, split: aigvd_int, label: 0, generator: OpenVid-HD@fps24}
+
+validation:
+  min_duration: 2.0
+  min_side: 224
+  min_fps: 8
+  filter_eval: true
+  probe_timeout: 60
+  decode_timeout: 120
+
+extraction:
+  num_frames: 16
+  base_fps: 8
+  min_duration_for_base_fps: 2.0
+  window: center
+  jpeg_quality: 95
+  max_short_side: 224
+  decode_timeout: 300
+  min_free_gb: 50
+  output: clips
+
+clips:
+  size: 224
+  crop: square
+  jpeg_quality: 95
+  keep_native: []
+
+shards:
+  videos_per_shard: 3000
+
+drive:
+  remote: gdrive:DeepVision/aigvd_fps24_c2_v1
+  rclone: rclone
