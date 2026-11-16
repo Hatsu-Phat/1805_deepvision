@@ -55,3 +55,26 @@ def test_c2v2_bottleneck_removes_detail_above_b_and_keeps_size():
                               - dec(shrink_jpeg(png(a), "square", 224, 95))).mean()
     assert change(smooth) < 0.25 * change(noise)  # measured 5.1 vs 35.7 gray levels
     assert shrink_jpeg(png(noise), "square", 224, 95, 0) == shrink_jpeg(png(noise), "square", 224, 95, 224)
+
+
+def test_c2v3_reencode_keeps_frames_is_deterministic_and_crf_controls_loss():
+    """C2 v3 (2026-11-16): one shared H.264 generation at the bottleneck scale. libx264 (ffmpeg 9.0.2 gyan build) is not
+    bit-exact run to run even single-threaded (about 1 run in 15 differs, by <= 1.2 gray levels mean per frame vs ~9.6
+    for the compression itself), so repeat runs are compared with a tolerance."""
+    import cv2
+    import numpy as np
+
+    from deepvision.data.clips import reencode_frames
+
+    rng = np.random.default_rng(0)
+    base = cv2.resize(rng.integers(0, 256, (56, 56, 3), np.uint8), (224, 224), interpolation=cv2.INTER_LINEAR)
+    frames = [cv2.imencode(".jpg", np.roll(base, 2 * k, axis=1), [cv2.IMWRITE_JPEG_QUALITY, 95])[1].tobytes()
+              for k in range(16)]
+    dec = lambda b: cv2.imdecode(np.frombuffer(b, np.uint8), cv2.IMREAD_COLOR).astype(np.float32)  # noqa: E731
+    lo = reencode_frames(frames, 224, 192, 23, 95)
+    assert len(lo) == 16 and all(dec(b).shape == (224, 224, 3) for b in lo)
+    again = reencode_frames(frames, 224, 192, 23, 95)
+    assert max(np.abs(dec(a) - dec(b)).mean() for a, b in zip(lo, again)) < 2.0
+    err = lambda out: np.mean([np.abs(dec(a) - dec(b)).mean() for a, b in zip(frames, out)])  # noqa: E731
+    assert err(lo) < err(reencode_frames(frames, 224, 192, 40, 95))
+    assert len(reencode_frames(frames[:8], 224, 192, 23, 95)) == 8

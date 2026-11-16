@@ -33,7 +33,8 @@ from ..data.config import SPLITS
 LOG = logging.getLogger("deepvision")
 FRAME_INDICES = [0, 2, 4, 6, 9, 11, 13, 15]
 # "odd" = the other 8 clip frames (T0, 2026-11-13): even + odd give all 16 frames of a clip
-FRAME_SETS = {"even": FRAME_INDICES, "odd": [1, 3, 5, 7, 8, 10, 12, 14]}
+FRAME_SETS = {"even": FRAME_INDICES, "odd": [1, 3, 5, 7, 8, 10, 12, 14],
+              "first8": list(range(8))}  # C2 v3 short view (2026-11-16): 8-frame clips, 1 s on the 8 fps grid
 INDEX_COLUMNS = ["video_id", "label", "generator", "key"]
 
 

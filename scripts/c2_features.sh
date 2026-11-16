@@ -7,6 +7,9 @@
 # Arg 1 = protocol version V (default c2; c2v2 = C2 v2, bandwidth bottleneck 192, 2026-11-15): Drive folders
 # <ds>_<V>_v1, features ~/deepvision_features_<V> -> features_<V>_v1, runs ~/deepvision_runs/<V>, logs <V>_*.log.
 #   nohup nice -n 10 bash scripts/c2_features.sh c2v2 > ~/deepvision_runs/p2_logs/main_c2v2.log 2>&1 < /dev/null & disown
+# C2 v3 (2026-11-16): env PAIRS overrides the <ds>:<split> list (e.g. PAIRS="vif:vif_train aigvd_int:aigvd_int" for the
+# CRF screen; GenVideo: "genvideo:test genvideo_int:genvideo_int"), FRAMES=first8 for the 8-frame T1 view (tag ...s),
+# NO_D3=1 skips D3. Drive folder = <ds>_<V>_v1, features -> features_<V>_v1/<enc>/<split>.
 set -u
 V="${1:-c2}"
 cd "$(dirname "$0")/.."
@@ -18,8 +21,10 @@ mkdir -p "$L" "$HOME/deepvision_runs/$V"
 echo "start $V $(date) commit $(git rev-parse --short HEAD)"
 nvidia-smi --query-gpu=memory.used,memory.total --format=csv
 df -h "$HOME" | tail -1
-for pair in vif_$V:vif_train vif_$V:vif_test aigvd_int_$V:aigvd_int aigvd_$V:aigvd_test; do
-    root=gdrive:DeepVision/${pair%%:*}_v1
+PAIRS="${PAIRS:-vif:vif_train vif:vif_test aigvd_int:aigvd_int aigvd:aigvd_test}"
+FRAMES="${FRAMES:-even}"
+for pair in $PAIRS; do
+    root=gdrive:DeepVision/${pair%%:*}_${V}_v1
     S2=${pair##*:}
     until [ -n "$(rclone lsf "$root/shards/${S2}_index.csv" 2>/dev/null)" ]; do
         echo "$S2: waiting for shards on $root $(date)"; sleep 600
@@ -32,7 +37,7 @@ for pair in vif_$V:vif_train vif_$V:vif_test aigvd_int_$V:aigvd_int aigvd_$V:aig
     echo "$S2 extracted, upload exit $? $(date)"
 done
 out="$HOME/deepvision_runs/$V/d3_aigvd_$V"
-[ -f "$out/summary.json" ] || python -m deepvision.baselines.d3 --root gdrive:DeepVision/aigvd_${V}_v1 --split aigvd_test \
+[ -n "${NO_D3:-}" ] || [ -f "$out/summary.json" ] || python -m deepvision.baselines.d3 --root gdrive:DeepVision/aigvd_${V}_v1 --split aigvd_test \
     --no-features --out "$out" > "$L/${V}_d3.log" 2>&1
 echo "d3: $(cat "$out/summary.json" 2>/dev/null | tr -d '\n ')"
 rclone copy "$HOME/deepvision_runs/$V" gdrive:DeepVision/runs/$V --exclude "*.npy" > "$L/${V}_upload_runs.log" 2>&1

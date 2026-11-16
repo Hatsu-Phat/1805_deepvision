@@ -18,6 +18,7 @@ import io
 import json
 import os
 import shutil
+import subprocess
 import tarfile
 import time
 from concurrent.futures import ProcessPoolExecutor, as_completed
@@ -34,7 +35,8 @@ from .transforms import crop_center_by_percentage, demamba_crop_percentage
 
 
 def clip_options(cfg: DataConfig) -> dict:
-    return {"size": 224, "crop": "demamba", "jpeg_quality": 95, "keep_native": ["test"], "bottleneck": 0} | cfg.clips
+    return {"size": 224, "crop": "demamba", "jpeg_quality": 95, "keep_native": ["test"], "bottleneck": 0,
+            "reencode_crf": 0} | cfg.clips
 
 
 def clip_path_for(clips_dir: Path, row: dict) -> Path:
@@ -77,6 +79,40 @@ def shrink_jpeg(data: bytes, crop: float | str, size: int, quality: int, bottlen
     return buf.tobytes()
 
 
+def reencode_frames(frames: list[bytes], size: int, side: int, crf: int, quality: int, fps: int = 8,
+                    ffmpeg: str = "ffmpeg") -> list[bytes]:
+    """C2 v3 (2026-11-16): one common compression generation for every clip. The size x size JPEG frames go down to
+    side x side (INTER_AREA), are encoded together as one H.264 stream (libx264, preset medium, CRF crf, yuv420p,
+    fps, one GOP, single thread; libx264 is still not bit-exact run to run, see the test), decoded, and go back up to size x size
+    (INTER_LINEAR) -> JPEG. Whatever codec/scale a source had, every clip then ends with the same codec at the same
+    scale."""
+    imgs = []
+    for b in frames:
+        img = cv2.imdecode(np.frombuffer(b, np.uint8), cv2.IMREAD_COLOR)
+        if img is None:
+            raise RuntimeError("cannot decode frame")
+        imgs.append(cv2.resize(img, (side, side), interpolation=cv2.INTER_AREA))
+    raw = np.ascontiguousarray(np.stack(imgs)).tobytes()
+    enc = subprocess.run([ffmpeg, "-v", "error", "-f", "rawvideo", "-pix_fmt", "bgr24", "-s", f"{side}x{side}",
+                          "-r", str(fps), "-i", "-", "-c:v", "libx264", "-preset", "medium", "-crf", str(crf),
+                          "-pix_fmt", "yuv420p", "-g", str(len(imgs)), "-threads", "1", "-filter_threads", "1",
+                          "-x264-params", "threads=1:lookahead-threads=1:sliced-threads=0", "-f", "h264", "-"],
+                         input=raw, capture_output=True, check=True).stdout
+    dec = subprocess.run([ffmpeg, "-v", "error", "-threads", "1", "-f", "h264", "-i", "-", "-filter_threads", "1",
+                          "-f", "rawvideo", "-pix_fmt", "bgr24", "-"], input=enc, capture_output=True, check=True).stdout
+    n = len(dec) // (side * side * 3)
+    if n != len(imgs):
+        raise RuntimeError(f"re-encode returned {n} frames, expected {len(imgs)}")
+    out = []
+    for img in np.frombuffer(dec, np.uint8).reshape(n, side, side, 3):
+        img = cv2.resize(img, (size, size), interpolation=cv2.INTER_LINEAR)
+        ok, buf = cv2.imencode(".jpg", img, [cv2.IMWRITE_JPEG_QUALITY, quality])
+        if not ok:
+            raise RuntimeError("jpeg encode failed")
+        out.append(buf.tobytes())
+    return out
+
+
 def write_clip(path: Path, frames: list[bytes], meta: dict) -> int:
     """Write frames + meta.json into an uncompressed tar (atomically). Returns the file size."""
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -109,9 +145,12 @@ def build_clip(frames: list[bytes], meta: dict, opts: dict, path: Path, clips_ro
     size, quality = int(opts["size"]), int(opts["jpeg_quality"])
     bottleneck = int(opts.get("bottleneck") or 0)
     small = [shrink_jpeg(b, crop, size, quality, bottleneck) for b in frames]
+    crf = int(opts.get("reencode_crf") or 0)
+    if crf:  # C2 v3: common H.264 generation at the bottleneck scale
+        small = reencode_frames(small, size, bottleneck or size, crf, quality)
     meta = meta | {"native_height": meta["height"], "native_width": meta["width"], "native_bytes": meta["bytes"],
                    "height": size, "width": size, "crop": crop, "clip_quality": quality,
-                   "bottleneck": bottleneck,
+                   "bottleneck": bottleneck, "reencode_crf": crf,
                    "clip_path": path.relative_to(clips_root).as_posix(), "bytes": sum(map(len, small))}
     meta["clip_bytes"] = write_clip(path, small, meta)
     got, _ = read_clip(path)
